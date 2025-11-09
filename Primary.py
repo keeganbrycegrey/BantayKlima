@@ -2,33 +2,111 @@ import streamlit as st
 import requests
 import pandas as pd
 import pydeck as pdk
+import streamlit.components.v1 as components
 from datetime import datetime, timedelta
+import json
 
-st.set_page_config(page_title="PH Weather & Hazards", page_icon="🌏", layout="wide")
+st.set_page_config(
+    page_title="PH Weather & Hazards",
+    page_icon="🌏",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ---------------- Configuration ----------------
 WEATHERAPI_KEY = "01cce600297f40debe2164114250911"
+OPENWEATHER_KEY = "f72458378cda7bd747aaa6415f7d1a98"
+
+# ---------------- Custom CSS ----------------
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1f77b4;
+        margin-bottom: 0.5rem;
+    }
+    .sub-header {
+        font-size: 1.1rem;
+        color: #666;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+    }
+    .stAlert {
+        border-radius: 10px;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.5rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------- Helper Functions ----------------
+def get_weather_icon(condition_text):
+    """Map weather condition to emoji"""
+    condition = condition_text.lower()
+    if "sunny" in condition or "clear" in condition:
+        return "☀️"
+    elif "partly cloudy" in condition:
+        return "⛅"
+    elif "cloudy" in condition or "overcast" in condition:
+        return "☁️"
+    elif "rain" in condition or "drizzle" in condition:
+        return "🌧️"
+    elif "storm" in condition or "thunder" in condition:
+        return "⛈️"
+    elif "snow" in condition:
+        return "❄️"
+    elif "fog" in condition or "mist" in condition:
+        return "🌫️"
+    return "🌤️"
+
+def get_aqi_status(aqi_index):
+    """Get air quality status based on US EPA index"""
+    if aqi_index == 1:
+        return "Good", "🟢"
+    elif aqi_index == 2:
+        return "Moderate", "🟡"
+    elif aqi_index == 3:
+        return "Unhealthy for Sensitive", "🟠"
+    elif aqi_index == 4:
+        return "Unhealthy", "🔴"
+    elif aqi_index == 5:
+        return "Very Unhealthy", "🟣"
+    elif aqi_index == 6:
+        return "Hazardous", "🟤"
+    return "Unknown", "⚪"
+
+def format_wind_direction(degrees):
+    """Convert wind degrees to cardinal direction"""
+    directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+    idx = int((degrees + 11.25) / 22.5) % 16
+    return directions[idx]
 
 # ---------------- Cache Configuration ----------------
-@st.cache_data(ttl=300)  # 5 minutes
+@st.cache_data(ttl=300, show_spinner=False)
 def geocode(query):
     """Geocode location with caching"""
     try:
         r = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
-            params={"name": query, "count": 1},
+            params={"name": query, "count": 3},
             timeout=10
         )
         r.raise_for_status()
-        results = r.json().get("results")
-        if results:
-            return results[0]["latitude"], results[0]["longitude"], results[0]["name"]
+        return r.json().get("results", [])
     except Exception as e:
         st.error(f"Geocoding error: {e}")
-        return None
-    return None
+        return []
 
-@st.cache_data(ttl=600)  # 10 minutes
+@st.cache_data(ttl=600, show_spinner=False)
 def get_weather_current(lat, lon):
     """Fetch current weather from WeatherAPI"""
     try:
@@ -47,7 +125,7 @@ def get_weather_current(lat, lon):
         st.error(f"Weather API error: {e}")
         return None
 
-@st.cache_data(ttl=600)  # 10 minutes
+@st.cache_data(ttl=600, show_spinner=False)
 def get_weather_forecast(lat, lon, days=7):
     """Fetch forecast weather from WeatherAPI"""
     try:
@@ -68,30 +146,28 @@ def get_weather_forecast(lat, lon, days=7):
         st.error(f"Weather API error: {e}")
         return None
 
-@st.cache_data(ttl=1800)  # 30 minutes
-def arcgis_geojson(url, fallback=None):
-    """Fetch ArcGIS GeoJSON with fallback"""
+@st.cache_data(ttl=1800, show_spinner=False)
+def arcgis_geojson(url):
+    """Fetch ArcGIS GeoJSON with better error handling"""
     try:
         r = requests.get(url, params={
             "where": "1=1",
             "outFields": "*",
             "f": "geojson",
             "returnGeometry": "true",
-            "resultRecordCount": 1000  # Limit results
-        }, timeout=30)
+            "resultRecordCount": 500
+        }, timeout=45)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        return data if data.get("features") else {"type": "FeatureCollection", "features": []}
+    except requests.exceptions.Timeout:
+        st.warning(f"Request timeout for {url.split('/')[-3]}")
+        return {"type": "FeatureCollection", "features": []}
     except Exception as e:
-        if fallback:
-            try:
-                r = requests.get(fallback, timeout=20)
-                r.raise_for_status()
-                return r.json()
-            except:
-                pass
+        st.warning(f"Could not fetch layer: {str(e)[:50]}")
         return {"type": "FeatureCollection", "features": []}
 
-@st.cache_data(ttl=3600)  # 1 hour
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_typhoon_tracks():
     """Fetch typhoon tracks from GDACS"""
     try:
@@ -101,131 +177,219 @@ def fetch_typhoon_tracks():
         )
         r.raise_for_status()
         data = r.json()
-        return data.get("features", [])
+        features = data.get("features", [])
+        return features if features else []
     except Exception as e:
-        st.warning(f"Could not fetch typhoon tracks: {e}")
         return []
 
 # ---------------- Hazard URLs ----------------
-FLOOD_URL = "https://controlmap.mgb.gov.ph/arcgis/rest/services/GeospatialDataInventory/GDI_Detailed_Flood_Susceptibility/FeatureServer/0/query"
-LANDSLIDE_URL = "https://hazardhunter.georisk.gov.ph/server/rest/services/Landslide/Rain_Induced_Landslide_Hazard/MapServer/0/query"
-TSUNAMI_URL = "https://hazardhunter.georisk.gov.ph/server/rest/services/Tsunami/Tsunami_Hazard/MapServer/0/query"
-RAINFALL_URL = "https://portal.georisk.gov.ph/arcgis/rest/services/PAGASA/PAGASA/MapServer/0/query"
+HAZARD_LAYERS = {
+    "Flood": {
+        "url": "https://controlmap.mgb.gov.ph/arcgis/rest/services/GeospatialDataInventory/GDI_Detailed_Flood_Susceptibility/FeatureServer/0/query",
+        "color": "[100, 100, 255, 180]",
+        "line_color": [0, 0, 255],
+        "icon": "🌊"
+    },
+    "Landslide": {
+        "url": "https://hazardhunter.georisk.gov.ph/server/rest/services/Landslide/Rain_Induced_Landslide_Hazard/MapServer/0/query",
+        "color": "[255, 165, 0, 180]",
+        "line_color": [255, 100, 0],
+        "icon": "⛰️"
+    },
+    "Tsunami": {
+        "url": "https://hazardhunter.georisk.gov.ph/server/rest/services/Tsunami/Tsunami_Hazard/MapServer/0/query",
+        "color": "[255, 0, 0, 150]",
+        "line_color": [200, 0, 0],
+        "icon": "🌊"
+    },
+    "Rainfall": {
+        "url": "https://portal.georisk.gov.ph/arcgis/rest/services/PAGASA/PAGASA/MapServer/0/query",
+        "color": "[0, 150, 255, 150]",
+        "line_color": [0, 100, 200],
+        "icon": "🌧️"
+    }
+}
 
 # ---------------- Sidebar ----------------
-st.sidebar.title("🇵🇭 PH Weather + Hazards")
-st.sidebar.markdown("### 📍 Location")
-
-# Location input
-place = st.sidebar.text_input("City / Municipality", placeholder="e.g., Manila, Cebu, Davao")
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    lat = st.number_input("Latitude", value=14.5995, format="%.6f", key="lat")
-with col2:
-    lon = st.number_input("Longitude", value=120.9842, format="%.6f", key="lon")
-
-# Geocoding
-if place:
-    with st.spinner("🔍 Finding location..."):
-        geo = geocode(place)
-        if geo:
-            lat, lon, resolved_name = geo
-            st.sidebar.success(f"✓ {resolved_name}")
-            st.session_state['lat'] = lat
-            st.session_state['lon'] = lon
-        else:
-            st.sidebar.error("❌ Location not found")
-
-st.sidebar.markdown("### 🌤️ Weather")
-forecast_type = st.sidebar.radio(
-    "Forecast Type",
-    ["Current", "Hourly (48h)", "Daily (7d)"],
-    label_visibility="collapsed"
-)
-
-st.sidebar.markdown("### 🛑 Hazard Layers")
-hazards_enabled = st.sidebar.multiselect(
-    "Select hazards to display",
-    ["Flood", "Landslide", "Tsunami", "Typhoon Track", "Rainfall"],
-    default=["Flood", "Typhoon Track"],
-    label_visibility="collapsed"
-)
-
-st.sidebar.markdown("---")
-st.sidebar.caption("**Data Sources:**")
-st.sidebar.caption("• Weather: WeatherAPI.com")
-st.sidebar.caption("• Hazards: MGB, PHIVOLCS, PAGASA, GDACS")
-st.sidebar.caption(f"Last updated: {datetime.now().strftime('%I:%M %p')}")
+with st.sidebar:
+    st.title("🇵🇭 PH Weather Monitor")
+    st.markdown("---")
+    
+    # Location Section
+    st.markdown("### 📍 Location")
+    place = st.text_input("🔍 Search City/Municipality", placeholder="e.g., Manila, Cebu, Davao")
+    
+    # Geocoding with multiple results
+    if place:
+        with st.spinner("🔍 Searching..."):
+            results = geocode(place)
+            if results:
+                location_options = [f"{r.get('name', '')}, {r.get('admin1', '')}" for r in results]
+                selected = st.selectbox("Select location:", location_options)
+                if selected:
+                    idx = location_options.index(selected)
+                    lat = results[idx]["latitude"]
+                    lon = results[idx]["longitude"]
+                    st.success(f"✓ {selected}")
+            else:
+                st.error("❌ Location not found")
+                lat = 14.5995
+                lon = 120.9842
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            lat = st.number_input("Latitude", value=14.5995, format="%.6f")
+        with col2:
+            lon = st.number_input("Longitude", value=120.9842, format="%.6f")
+    
+    st.markdown("---")
+    
+    # Weather Forecast Type
+    st.markdown("### 🌤️ Forecast")
+    forecast_type = st.radio(
+        "Select forecast type:",
+        ["Current", "Hourly", "Daily"],
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    
+    # Weather Map Layers
+    st.markdown("### 🗺️ Weather Layers")
+    weather_layers = st.multiselect(
+        "Select weather overlays:",
+        ["Precipitation", "Temperature", "Clouds", "Wind Speed", "Pressure"],
+        default=["Precipitation"],
+        label_visibility="collapsed"
+    )
+    
+    map_opacity = st.slider("Layer Opacity", 0.0, 1.0, 0.6, 0.1)
+    
+    st.markdown("---")
+    
+    # Hazard Layers
+    st.markdown("### 🛑 Hazard Layers")
+    hazards_enabled = st.multiselect(
+        "Select hazards:",
+        ["Flood", "Landslide", "Tsunami", "Typhoon Track", "Rainfall"],
+        default=["Typhoon Track"],
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    st.caption("**📊 Data Sources:**")
+    st.caption("• WeatherAPI.com")
+    st.caption("• OpenWeatherMap")
+    st.caption("• MGB, PHIVOLCS, PAGASA, GDACS")
+    st.caption(f"🕐 Updated: {datetime.now().strftime('%I:%M %p')}")
 
 # ---------------- Main Content ----------------
-st.title("🌏 PH Weather & Hazard Monitor")
-st.markdown("Real-time weather forecasts and hazard mapping for the Philippines")
+st.markdown('<p class="main-header">🌏 Philippine Weather & Hazard Monitor</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Real-time weather forecasts and disaster risk mapping</p>', unsafe_allow_html=True)
 
-# Weather display
-col1, col2 = st.columns([2, 1])
+# Weather Alerts Banner
+weather_data_check = get_weather_forecast(lat, lon, days=1)
+if weather_data_check:
+    alerts = weather_data_check.get("alerts", {}).get("alert", [])
+    if alerts:
+        for alert in alerts:
+            st.error(f"⚠️ **WEATHER ALERT**: {alert.get('headline', 'Alert')}")
 
-with col1:
-    st.markdown("### 🌤️ Weather Forecast")
-    
+# Main content tabs
+tab1, tab2, tab3 = st.tabs(["📊 Weather Forecast", "🗺️ Weather Map", "🛑 Hazard Map"])
+
+# ---------------- Tab 1: Weather Forecast ----------------
+with tab1:
     if forecast_type == "Current":
         weather_data = get_weather_current(lat, lon)
         
         if weather_data:
             current = weather_data.get("current", {})
             location = weather_data.get("location", {})
-            
-            # Location info
-            st.caption(f"📍 {location.get('name', '')}, {location.get('region', '')}, {location.get('country', '')}")
-            st.caption(f"🕐 Local time: {location.get('localtime', '')}")
-            
-            # Main metrics
-            metric_cols = st.columns(4)
-            with metric_cols[0]:
-                st.metric("🌡️ Temperature", f"{current.get('temp_c', 'N/A')}°C", 
-                         delta=f"Feels like {current.get('feelslike_c', 'N/A')}°C")
-            with metric_cols[1]:
-                st.metric("💧 Humidity", f"{current.get('humidity', 'N/A')}%")
-            with metric_cols[2]:
-                st.metric("💨 Wind", f"{current.get('wind_kph', 'N/A')} km/h",
-                         delta=current.get('wind_dir', ''))
-            with metric_cols[3]:
-                st.metric("🌧️ Precipitation", f"{current.get('precip_mm', 'N/A')} mm")
-            
-            # Additional metrics
-            metric_cols2 = st.columns(4)
-            with metric_cols2[0]:
-                st.metric("☁️ Cloud Cover", f"{current.get('cloud', 'N/A')}%")
-            with metric_cols2[1]:
-                st.metric("👁️ Visibility", f"{current.get('vis_km', 'N/A')} km")
-            with metric_cols2[2]:
-                st.metric("🌡️ Pressure", f"{current.get('pressure_mb', 'N/A')} mb")
-            with metric_cols2[3]:
-                st.metric("☀️ UV Index", f"{current.get('uv', 'N/A')}")
-            
-            # Condition
             condition = current.get("condition", {})
-            st.info(f"**Current Conditions:** {condition.get('text', 'N/A')}")
             
-            # Air Quality if available
+            # Location header
+            col_head1, col_head2 = st.columns([3, 1])
+            with col_head1:
+                st.markdown(f"### 📍 {location.get('name', '')}, {location.get('region', '')}")
+                st.caption(f"🕐 {location.get('localtime', '')} | Coordinates: {lat:.4f}, {lon:.4f}")
+            with col_head2:
+                weather_icon = get_weather_icon(condition.get('text', ''))
+                st.markdown(f"<div style='text-align: center; font-size: 4rem;'>{weather_icon}</div>", unsafe_allow_html=True)
+            
+            st.markdown(f"**{condition.get('text', 'N/A')}**")
+            
+            # Primary metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric(
+                    "🌡️ Temperature",
+                    f"{current.get('temp_c', 'N/A')}°C",
+                    delta=f"Feels {current.get('feelslike_c', 'N/A')}°C",
+                    delta_color="off"
+                )
+            with col2:
+                st.metric(
+                    "💧 Humidity",
+                    f"{current.get('humidity', 'N/A')}%"
+                )
+            with col3:
+                wind_dir = format_wind_direction(current.get('wind_degree', 0))
+                st.metric(
+                    "💨 Wind",
+                    f"{current.get('wind_kph', 'N/A')} km/h",
+                    delta=f"{wind_dir}",
+                    delta_color="off"
+                )
+            with col4:
+                st.metric(
+                    "🌧️ Precipitation",
+                    f"{current.get('precip_mm', 'N/A')} mm"
+                )
+            
+            st.markdown("---")
+            
+            # Secondary metrics
+            col5, col6, col7, col8 = st.columns(4)
+            with col5:
+                st.metric("☁️ Clouds", f"{current.get('cloud', 'N/A')}%")
+            with col6:
+                st.metric("👁️ Visibility", f"{current.get('vis_km', 'N/A')} km")
+            with col7:
+                st.metric("🌡️ Pressure", f"{current.get('pressure_mb', 'N/A')} mb")
+            with col8:
+                uv_value = current.get('uv', 0)
+                uv_color = "🟢" if uv_value < 3 else "🟡" if uv_value < 6 else "🟠" if uv_value < 8 else "🔴"
+                st.metric("☀️ UV Index", f"{uv_value} {uv_color}")
+            
+            # Air Quality
             if current.get('air_quality'):
+                st.markdown("---")
+                st.markdown("### 🌫️ Air Quality Index")
+                
                 aqi = current['air_quality']
-                st.markdown("#### 🌫️ Air Quality")
-                aqi_cols = st.columns(3)
-                with aqi_cols[0]:
-                    st.metric("PM2.5", f"{aqi.get('pm2_5', 'N/A'):.1f}")
-                with aqi_cols[1]:
-                    st.metric("PM10", f"{aqi.get('pm10', 'N/A'):.1f}")
-                with aqi_cols[2]:
-                    st.metric("US EPA Index", f"{aqi.get('us-epa-index', 'N/A')}")
+                epa_index = aqi.get('us-epa-index', 0)
+                status, status_icon = get_aqi_status(epa_index)
+                
+                col_aqi1, col_aqi2, col_aqi3, col_aqi4 = st.columns(4)
+                with col_aqi1:
+                    st.metric("Overall", f"{status} {status_icon}")
+                with col_aqi2:
+                    st.metric("PM2.5", f"{aqi.get('pm2_5', 0):.1f} μg/m³")
+                with col_aqi3:
+                    st.metric("PM10", f"{aqi.get('pm10', 0):.1f} μg/m³")
+                with col_aqi4:
+                    st.metric("CO", f"{aqi.get('co', 0):.1f} μg/m³")
     
-    elif forecast_type == "Hourly (48h)":
-        weather_data = get_weather_forecast(lat, lon, days=3)
+    elif forecast_type == "Hourly":
+        weather_data = get_weather_forecast(lat, lon, days=2)
         
         if weather_data:
-            forecast = weather_data.get("forecast", {}).get("forecastday", [])
+            st.markdown("### ⏰ 48-Hour Forecast")
             
-            # Build hourly dataframe
+            forecast = weather_data.get("forecast", {}).get("forecastday", [])
             hourly_data = []
+            
             for day in forecast:
                 for hour in day.get("hour", []):
                     hourly_data.append({
@@ -236,61 +400,71 @@ with col1:
                         "precip_mm": hour.get("precip_mm"),
                         "wind_kph": hour.get("wind_kph"),
                         "condition": hour.get("condition", {}).get("text"),
-                        "chance_of_rain": hour.get("chance_of_rain")
+                        "chance_of_rain": hour.get("chance_of_rain"),
+                        "uv": hour.get("uv")
                     })
             
-            df = pd.DataFrame(hourly_data[:48])  # Limit to 48 hours
+            df = pd.DataFrame(hourly_data[:48])
             df["time"] = pd.to_datetime(df["time"])
             
-            tab1, tab2 = st.tabs(["📊 Charts", "📋 Table"])
+            subtab1, subtab2 = st.tabs(["📊 Visualizations", "📋 Data Table"])
             
-            with tab1:
-                st.markdown("**Temperature & Feels Like**")
-                st.line_chart(df.set_index("time")[["temp_c", "feelslike_c"]], height=250)
+            with subtab1:
+                st.markdown("**🌡️ Temperature Forecast**")
+                st.line_chart(
+                    df.set_index("time")[["temp_c", "feelslike_c"]],
+                    height=300,
+                    use_container_width=True
+                )
                 
-                st.markdown("**Precipitation & Rain Chance**")
-                chart_cols = st.columns(2)
-                with chart_cols[0]:
-                    st.line_chart(df.set_index("time")[["precip_mm"]], height=200)
-                with chart_cols[1]:
-                    st.line_chart(df.set_index("time")[["chance_of_rain"]], height=200)
+                col_chart1, col_chart2 = st.columns(2)
+                with col_chart1:
+                    st.markdown("**🌧️ Precipitation (mm)**")
+                    st.area_chart(df.set_index("time")[["precip_mm"]], height=250)
+                
+                with col_chart2:
+                    st.markdown("**💨 Wind Speed (km/h)**")
+                    st.line_chart(df.set_index("time")[["wind_kph"]], height=250)
             
-            with tab2:
+            with subtab2:
                 st.dataframe(
                     df,
                     column_config={
                         "time": st.column_config.DatetimeColumn("Time", format="MMM D, h:mm a"),
-                        "temp_c": st.column_config.NumberColumn("Temp (°C)", format="%.1f"),
-                        "feelslike_c": st.column_config.NumberColumn("Feels (°C)", format="%.1f"),
-                        "humidity": st.column_config.NumberColumn("Humidity (%)", format="%.0f"),
-                        "precip_mm": st.column_config.NumberColumn("Rain (mm)", format="%.1f"),
-                        "wind_kph": st.column_config.NumberColumn("Wind (km/h)", format="%.1f"),
-                        "chance_of_rain": st.column_config.NumberColumn("Rain Chance (%)", format="%.0f"),
+                        "temp_c": st.column_config.NumberColumn("Temp °C", format="%.1f"),
+                        "feelslike_c": st.column_config.NumberColumn("Feels °C", format="%.1f"),
+                        "humidity": st.column_config.NumberColumn("Humidity %", format="%.0f"),
+                        "precip_mm": st.column_config.NumberColumn("Rain mm", format="%.1f"),
+                        "wind_kph": st.column_config.NumberColumn("Wind km/h", format="%.1f"),
+                        "chance_of_rain": st.column_config.NumberColumn("Rain %", format="%.0f"),
+                        "uv": st.column_config.NumberColumn("UV", format="%.1f"),
                         "condition": "Conditions"
                     },
                     hide_index=True,
-                    use_container_width=True
+                    use_container_width=True,
+                    height=400
                 )
     
-    else:  # Daily (7d)
+    else:  # Daily forecast
         weather_data = get_weather_forecast(lat, lon, days=7)
         
         if weather_data:
-            forecast = weather_data.get("forecast", {}).get("forecastday", [])
+            st.markdown("### 📅 7-Day Forecast")
             
-            # Build daily dataframe
+            forecast = weather_data.get("forecast", {}).get("forecastday", [])
             daily_data = []
+            
             for day in forecast:
                 day_data = day.get("day", {})
                 daily_data.append({
                     "date": day.get("date"),
+                    "condition": day_data.get("condition", {}).get("text"),
                     "maxtemp_c": day_data.get("maxtemp_c"),
                     "mintemp_c": day_data.get("mintemp_c"),
                     "avgtemp_c": day_data.get("avgtemp_c"),
                     "totalprecip_mm": day_data.get("totalprecip_mm"),
                     "avghumidity": day_data.get("avghumidity"),
                     "maxwind_kph": day_data.get("maxwind_kph"),
-                    "condition": day_data.get("condition", {}).get("text"),
                     "daily_chance_of_rain": day_data.get("daily_chance_of_rain"),
                     "uv": day_data.get("uv")
                 })
@@ -298,180 +472,213 @@ with col1:
             df = pd.DataFrame(daily_data)
             df["date"] = pd.to_datetime(df["date"])
             
-            tab1, tab2 = st.tabs(["📊 Charts", "📋 Table"])
+            subtab1, subtab2 = st.tabs(["📊 Visualizations", "📋 Data Table"])
             
-            with tab1:
-                st.markdown("**Temperature Range**")
-                st.line_chart(df.set_index("date")[["maxtemp_c", "mintemp_c", "avgtemp_c"]], height=250)
+            with subtab1:
+                st.markdown("**🌡️ Temperature Range**")
+                st.line_chart(
+                    df.set_index("date")[["maxtemp_c", "mintemp_c", "avgtemp_c"]],
+                    height=300,
+                    use_container_width=True
+                )
                 
-                st.markdown("**Precipitation & Rain Chance**")
-                chart_cols = st.columns(2)
-                with chart_cols[0]:
-                    st.bar_chart(df.set_index("date")[["totalprecip_mm"]], height=200)
-                with chart_cols[1]:
-                    st.line_chart(df.set_index("date")[["daily_chance_of_rain"]], height=200)
+                col_chart1, col_chart2 = st.columns(2)
+                with col_chart1:
+                    st.markdown("**🌧️ Total Precipitation (mm)**")
+                    st.bar_chart(df.set_index("date")[["totalprecip_mm"]], height=250)
+                
+                with col_chart2:
+                    st.markdown("**☔ Rain Probability (%)**")
+                    st.line_chart(df.set_index("date")[["daily_chance_of_rain"]], height=250)
             
-            with tab2:
+            with subtab2:
                 st.dataframe(
                     df,
                     column_config={
-                        "date": st.column_config.DatetimeColumn("Date", format="MMM D, YYYY"),
+                        "date": st.column_config.DatetimeColumn("Date", format="ddd, MMM D"),
+                        "condition": "Conditions",
                         "maxtemp_c": st.column_config.NumberColumn("Max °C", format="%.1f"),
                         "mintemp_c": st.column_config.NumberColumn("Min °C", format="%.1f"),
                         "avgtemp_c": st.column_config.NumberColumn("Avg °C", format="%.1f"),
-                        "totalprecip_mm": st.column_config.NumberColumn("Rain (mm)", format="%.1f"),
-                        "avghumidity": st.column_config.NumberColumn("Humidity (%)", format="%.0f"),
-                        "maxwind_kph": st.column_config.NumberColumn("Max Wind (km/h)", format="%.1f"),
-                        "daily_chance_of_rain": st.column_config.NumberColumn("Rain Chance (%)", format="%.0f"),
-                        "uv": st.column_config.NumberColumn("UV Index", format="%.1f"),
-                        "condition": "Conditions"
+                        "totalprecip_mm": st.column_config.NumberColumn("Rain mm", format="%.1f"),
+                        "avghumidity": st.column_config.NumberColumn("Humidity %", format="%.0f"),
+                        "maxwind_kph": st.column_config.NumberColumn("Wind km/h", format="%.1f"),
+                        "daily_chance_of_rain": st.column_config.NumberColumn("Rain %", format="%.0f"),
+                        "uv": st.column_config.NumberColumn("UV", format="%.1f")
                     },
                     hide_index=True,
                     use_container_width=True
                 )
-            
-            # Weather alerts if available
-            alerts = weather_data.get("alerts", {}).get("alert", [])
-            if alerts:
-                st.markdown("#### ⚠️ Weather Alerts")
-                for alert in alerts:
-                    st.warning(f"**{alert.get('headline')}**\n\n{alert.get('desc', '')}")
 
-with col2:
-    st.markdown("### ⚠️ Active Hazards")
+# ---------------- Tab 2: Weather Map ----------------
+with tab2:
+    st.markdown("### 🌤️ Live Weather Overlay Map")
     
-    hazard_count = len(hazards_enabled)
-    if hazard_count > 0:
-        st.info(f"Displaying {hazard_count} hazard layer(s)")
-        for hazard in hazards_enabled:
-            if hazard == "Typhoon Track":
-                st.warning("🌀 Typhoon Track Active")
-            elif hazard == "Flood":
-                st.error("🌊 Flood Susceptibility")
-            elif hazard == "Landslide":
-                st.error("⛰️ Landslide Risk")
-            elif hazard == "Tsunami":
-                st.warning("🌊 Tsunami Zones")
-            elif hazard == "Rainfall":
-                st.info("🌧️ Rainfall Radar")
+    if not weather_layers:
+        st.info("👆 Select weather layers from the sidebar to display on the map")
     else:
-        st.success("No hazard layers selected")
+        st.caption(f"Showing: {', '.join(weather_layers)} | Opacity: {int(map_opacity*100)}%")
+    
+    layer_map = {
+        "Precipitation": "precipitation_new",
+        "Temperature": "temp_new",
+        "Clouds": "clouds_new",
+        "Wind Speed": "wind_new",
+        "Pressure": "pressure_new"
+    }
+    
+    # Enhanced Leaflet map
+    map_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <style>
+            #map {{ height: 650px; width: 100%; border-radius: 10px; }}
+            .legend {{
+                background: white;
+                padding: 10px;
+                border-radius: 5px;
+                box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            }}
+            .legend h4 {{ margin: 0 0 5px; }}
+        </style>
+    </head>
+    <body>
+        <div id="map"></div>
+        <script>
+            var map = L.map('map').setView([{lat}, {lon}], 7);
+            
+            // Dark base map for better visibility
+            L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+                attribution: '© OpenStreetMap, © CartoDB',
+                maxZoom: 19
+            }}).addTo(map);
+    """
+    
+    # Add weather layers
+    for layer_name in weather_layers:
+        owm_layer = layer_map.get(layer_name)
+        if owm_layer:
+            map_html += f"""
+            L.tileLayer('https://tile.openweathermap.org/map/{owm_layer}/{{z}}/{{x}}/{{y}}.png?appid={OPENWEATHER_KEY}', {{
+                attribution: 'Weather: OpenWeatherMap',
+                opacity: {map_opacity}
+            }}).addTo(map);
+    """
+    
+    # Add location marker with custom icon
+    map_html += f"""
+            var redIcon = L.icon({{
+                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                iconSize: [25, 41],
+                iconAnchor: [12, 41],
+                popupAnchor: [1, -34],
+                shadowSize: [41, 41]
+            }});
+            
+            L.marker([{lat}, {lon}], {{icon: redIcon}}).addTo(map)
+                .bindPopup('<b>📍 Your Location</b><br>Lat: {lat:.4f}<br>Lon: {lon:.4f}')
+                .openPopup();
+            
+            // Add scale
+            L.control.scale().addTo(map);
+        </script>
+    </body>
+    </html>
+    """
+    
+    components.html(map_html, height=700)
+    
+    # Weather layer legend
+    if weather_layers:
+        with st.expander("🎨 Layer Legend"):
+            for layer in weather_layers:
+                if layer == "Precipitation":
+                    st.markdown("**🌧️ Precipitation**: Darker blue = heavier rain/snow")
+                elif layer == "Temperature":
+                    st.markdown("**🌡️ Temperature**: Blue (cold) → Red (hot)")
+                elif layer == "Clouds":
+                    st.markdown("**☁️ Clouds**: White areas show cloud coverage")
+                elif layer == "Wind Speed":
+                    st.markdown("**💨 Wind Speed**: Streamlines show wind direction and intensity")
+                elif layer == "Pressure":
+                    st.markdown("**🌡️ Pressure**: Contour lines show atmospheric pressure (mb)")
 
-# Hazard Map
-st.markdown("---")
-st.markdown("### 🗺️ Interactive Hazard Map")
-
-with st.spinner("Loading hazard data..."):
-    layers = []
+# ---------------- Tab 3: Hazard Map ----------------
+with tab3:
+    st.markdown("### 🛑 Natural Hazard Risk Layers")
     
-    if "Flood" in hazards_enabled:
-        flood_geo = arcgis_geojson(FLOOD_URL)
-        if flood_geo.get("features"):
+    if not hazards_enabled:
+        st.info("👆 Select hazard layers from the sidebar to display")
+    else:
+        with st.spinner("Loading hazard data layers..."):
+            layers = []
+            
+            # Process hazard layers
+            for hazard_name in hazards_enabled:
+                if hazard_name in HAZARD_LAYERS:
+                    hazard_config = HAZARD_LAYERS[hazard_name]
+                    geo_data = arcgis_geojson(hazard_config["url"])
+                    
+                    if geo_data.get("features"):
+                        layers.append(pdk.Layer(
+                            "GeoJsonLayer",
+                            data=geo_data,
+                            opacity=0.5,
+                            stroked=True,
+                            filled=True,
+                            pickable=True,
+                            get_fill_color=hazard_config["color"],
+                            get_line_color=hazard_config["line_color"],
+                            line_width_min_pixels=1,
+                            auto_highlight=True
+                        ))
+                        st.success(f"{hazard_config['icon']} {hazard_name} layer loaded ({len(geo_data['features'])} features)")
+                    else:
+                        st.warning(f"⚠️ {hazard_name} layer has no data for this area")
+            
+            # Typhoon tracks
+            if "Typhoon Track" in hazards_enabled:
+                track_feats = fetch_typhoon_tracks()
+                if track_feats:
+                    layers.append(pdk.Layer(
+                        "GeoJsonLayer",
+                        data={"type": "FeatureCollection", "features": track_feats},
+                        stroked=True,
+                        filled=False,
+                        get_line_color=[255, 0, 0],
+                        get_line_width=5,
+                        line_width_min_pixels=3,
+                        pickable=True
+                    ))
+                    st.success(f"🌀 Typhoon Track loaded ({len(track_feats)} active systems)")
+                else:
+                    st.info("✅ No active typhoons detected")
+            
+            # User location marker
             layers.append(pdk.Layer(
-                "GeoJsonLayer",
-                data=flood_geo,
-                opacity=0.5,
-                stroked=True,
-                filled=True,
-                pickable=True,
-                get_fill_color="[100, 100, 255, 180]",
-                get_line_color=[0, 0, 255],
-                line_width_min_pixels=1,
-                auto_highlight=True
-            ))
-    
-    if "Landslide" in hazards_enabled:
-        landslide_geo = arcgis_geojson(LANDSLIDE_URL)
-        if landslide_geo.get("features"):
-            layers.append(pdk.Layer(
-                "GeoJsonLayer",
-                data=landslide_geo,
-                opacity=0.5,
-                stroked=True,
-                filled=True,
-                pickable=True,
-                get_fill_color="[255, 165, 0, 180]",
-                get_line_color=[255, 100, 0],
-                line_width_min_pixels=1,
-                auto_highlight=True
-            ))
-    
-    if "Tsunami" in hazards_enabled:
-        tsunami_geo = arcgis_geojson(TSUNAMI_URL)
-        if tsunami_geo.get("features"):
-            layers.append(pdk.Layer(
-                "GeoJsonLayer",
-                data=tsunami_geo,
-                opacity=0.4,
-                stroked=True,
-                filled=True,
-                pickable=True,
-                get_fill_color="[255, 0, 0, 150]",
-                get_line_color=[200, 0, 0],
-                line_width_min_pixels=1,
-                auto_highlight=True
-            ))
-    
-    if "Rainfall" in hazards_enabled:
-        rain_geo = arcgis_geojson(RAINFALL_URL)
-        if rain_geo.get("features"):
-            layers.append(pdk.Layer(
-                "GeoJsonLayer",
-                data=rain_geo,
-                opacity=0.4,
-                stroked=True,
-                filled=True,
-                pickable=True,
-                get_fill_color="[0, 150, 255, 150]",
-                get_line_color=[0, 100, 200],
-                line_width_min_pixels=1,
-                auto_highlight=True
-            ))
-    
-    if "Typhoon Track" in hazards_enabled:
-        track_feats = fetch_typhoon_tracks()
-        if track_feats:
-            layers.append(pdk.Layer(
-                "GeoJsonLayer",
-                data={"type": "FeatureCollection", "features": track_feats},
-                stroked=True,
-                filled=False,
-                get_line_color=[255, 0, 0],
-                get_line_width=4,
-                line_width_min_pixels=2,
+                "ScatterplotLayer",
+                data=[{"lat": lat, "lon": lon}],
+                get_position='[lon, lat]',
+                get_radius=8000,
+                get_fill_color=[255, 0, 0, 200],
                 pickable=True
             ))
-    
-    # User location marker
-    layers.append(pdk.Layer(
-        "ScatterplotLayer",
-        data=[{"lat": lat, "lon": lon}],
-        get_position='[lon, lat]',
-        get_radius=5000,
-        get_fill_color=[255, 0, 0, 200],
-        pickable=True
-    ))
-    
-    # Create deck
-    deck = pdk.Deck(
-        initial_view_state=pdk.ViewState(
-            latitude=lat,
-            longitude=lon,
-            zoom=8,
-            pitch=0
-        ),
-        layers=layers,
-        tooltip={"html": "<b>{properties.name}</b><br/>Severity: {properties.severity}"}
-    )
-    
-    st.pydeck_chart(deck, use_container_width=True)
-
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666; padding: 20px;'>
-    <p><strong>Philippine Weather & Hazard Monitor</strong></p>
-    <p>Weather Data: WeatherAPI.com | Hazards: MGB, PHIVOLCS, PAGASA, GDACS</p>
-    <p style='font-size: 0.8em;'>For emergency situations, always follow official government advisories</p>
-</div>
-""", unsafe_allow_html=True)
+            
+            if layers:
+                deck = pdk.Deck(
+                    initial_view_state=pdk.ViewState(
+                        latitude=lat,
+                        longitude=lon,
+                        zoom=8,
+                        pitch=0
+                    ),
+                    layers=layers,
+                    tooltip={
+                        "html": "<b>{properties.name}</b><br/>Severity: {properties.severity}",
+                        "style": {"color": "white"}
+                    }
+                )
