@@ -527,64 +527,361 @@ with tab2:
         "Pressure": "pressure_new"
     }
     
-    # Enhanced Leaflet map
+    # Enhanced Leaflet map with advanced features
     map_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
+        <meta charset="utf-8">
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <style>
-            #map {{ height: 650px; width: 100%; border-radius: 10px; }}
-            .legend {{
-                background: white;
-                padding: 10px;
-                border-radius: 5px;
-                box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            body {{ margin: 0; padding: 0; }}
+            #map {{ 
+                height: 700px; 
+                width: 100%; 
+                border-radius: 12px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
             }}
-            .legend h4 {{ margin: 0 0 5px; }}
+            .legend {{
+                background: rgba(255, 255, 255, 0.95);
+                padding: 15px;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                max-width: 200px;
+            }}
+            .legend h4 {{ 
+                margin: 0 0 10px; 
+                font-size: 14px;
+                font-weight: 600;
+                color: #333;
+                border-bottom: 2px solid #667eea;
+                padding-bottom: 5px;
+            }}
+            .legend-item {{
+                margin: 8px 0;
+                font-size: 12px;
+                color: #555;
+                display: flex;
+                align-items: center;
+            }}
+            .legend-icon {{
+                width: 20px;
+                height: 20px;
+                border-radius: 3px;
+                margin-right: 8px;
+                display: inline-block;
+            }}
+            .info-box {{
+                background: rgba(255, 255, 255, 0.95);
+                padding: 12px;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                font-size: 13px;
+                max-width: 250px;
+            }}
+            .info-box h4 {{
+                margin: 0 0 8px;
+                font-size: 15px;
+                color: #667eea;
+                font-weight: 600;
+            }}
+            .coordinates {{
+                background: rgba(0, 0, 0, 0.7);
+                color: white;
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            }}
+            .leaflet-popup-content-wrapper {{
+                border-radius: 8px;
+                box-shadow: 0 3px 14px rgba(0,0,0,0.3);
+            }}
+            .leaflet-popup-content {{
+                margin: 15px;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            }}
+            .pulse {{
+                animation: pulse 2s infinite;
+            }}
+            @keyframes pulse {{
+                0% {{ opacity: 1; }}
+                50% {{ opacity: 0.5; }}
+                100% {{ opacity: 1; }}
+            }}
         </style>
     </head>
     <body>
         <div id="map"></div>
         <script>
-            var map = L.map('map').setView([{lat}, {lon}], 7);
+            // Initialize map with better settings
+            var map = L.map('map', {{
+                center: [{lat}, {lon}],
+                zoom: 8,
+                zoomControl: true,
+                minZoom: 5,
+                maxZoom: 18,
+                attributionControl: true
+            }});
             
-            // Dark base map for better visibility
-            L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-                attribution: '© OpenStreetMap, © CartoDB',
-                maxZoom: 19
-            }}).addTo(map);
+            // Base layer options
+            var baseLayers = {{
+                "Dark": L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+                    attribution: '© OpenStreetMap, © CartoDB',
+                    maxZoom: 19
+                }}),
+                "Satellite": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+                    attribution: 'Tiles © Esri',
+                    maxZoom: 19
+                }}),
+                "Streets": L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                    attribution: '© OpenStreetMap contributors',
+                    maxZoom: 19
+                }}),
+                "Terrain": L.tileLayer('https://stamen-tiles-{{s}}.a.ssl.fastly.net/terrain/{{z}}/{{x}}/{{y}}.jpg', {{
+                    attribution: 'Map tiles by Stamen Design, CC BY 3.0',
+                    maxZoom: 18
+                }})
+            }};
+            
+            // Add default base layer
+            baseLayers["Dark"].addTo(map);
+            
+            // Weather layers object
+            var weatherLayers = {{}};
     """
     
-    # Add weather layers
+    # Add weather layers with better controls
     for layer_name in weather_layers:
         owm_layer = layer_map.get(layer_name)
         if owm_layer:
             map_html += f"""
-            L.tileLayer('https://tile.openweathermap.org/map/{owm_layer}/{{z}}/{{x}}/{{y}}.png?appid={OPENWEATHER_KEY}', {{
+            weatherLayers["{layer_name}"] = L.tileLayer('https://tile.openweathermap.org/map/{owm_layer}/{{z}}/{{x}}/{{y}}.png?appid={OPENWEATHER_KEY}', {{
                 attribution: 'Weather: OpenWeatherMap',
-                opacity: {map_opacity}
+                opacity: {map_opacity},
+                maxZoom: 19
             }}).addTo(map);
     """
     
-    # Add location marker with custom icon
+    # Add location marker with pulsing effect
+    current_weather = get_weather_current(lat, lon)
+    temp_display = "N/A"
+    condition_display = "Loading..."
+    if current_weather:
+        temp_display = f"{current_weather.get('current', {}).get('temp_c', 'N/A')}°C"
+        condition_display = current_weather.get('current', {}).get('condition', {}).get('text', 'N/A')
+    
     map_html += f"""
-            var redIcon = L.icon({{
-                iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                iconSize: [25, 41],
-                iconAnchor: [12, 41],
-                popupAnchor: [1, -34],
-                shadowSize: [41, 41]
+            // Custom pulsing marker
+            var pulsingIcon = L.divIcon({{
+                className: 'custom-div-icon',
+                html: `
+                    <div style="position: relative;">
+                        <div style="
+                            width: 30px; 
+                            height: 30px; 
+                            background: rgba(255, 0, 0, 0.3);
+                            border-radius: 50%;
+                            position: absolute;
+                            top: -15px;
+                            left: -15px;
+                            animation: pulse 2s infinite;
+                        "></div>
+                        <div style="
+                            width: 15px; 
+                            height: 15px; 
+                            background: #ff0000;
+                            border: 3px solid white;
+                            border-radius: 50%;
+                            position: absolute;
+                            top: -7.5px;
+                            left: -7.5px;
+                            box-shadow: 0 0 10px rgba(255,0,0,0.5);
+                        "></div>
+                    </div>
+                `,
+                iconSize: [30, 30],
+                iconAnchor: [15, 15]
             }});
             
-            L.marker([{lat}, {lon}], {{icon: redIcon}}).addTo(map)
-                .bindPopup('<b>📍 Your Location</b><br>Lat: {lat:.4f}<br>Lon: {lon:.4f}')
-                .openPopup();
+            var locationMarker = L.marker([{lat}, {lon}], {{icon: pulsingIcon}}).addTo(map);
+            locationMarker.bindPopup(`
+                <div style="min-width: 200px;">
+                    <h3 style="margin: 0 0 10px; color: #667eea; font-size: 16px;">
+                        📍 Your Location
+                    </h3>
+                    <div style="margin: 8px 0;">
+                        <strong>🌡️ Temperature:</strong> {temp_display}
+                    </div>
+                    <div style="margin: 8px 0;">
+                        <strong>☁️ Conditions:</strong> {condition_display}
+                    </div>
+                    <div style="margin: 8px 0; font-size: 11px; color: #666;">
+                        <strong>Coordinates:</strong><br>
+                        Lat: {lat:.6f}<br>
+                        Lon: {lon:.6f}
+                    </div>
+                </div>
+            `).openPopup();
             
-            // Add scale
-            L.control.scale().addTo(map);
+            // Add circle around location
+            L.circle([{lat}, {lon}], {{
+                color: '#667eea',
+                fillColor: '#667eea',
+                fillOpacity: 0.1,
+                radius: 20000,
+                weight: 2,
+                dashArray: '5, 5'
+            }}).addTo(map);
+            
+            // Layer control
+            L.control.layers(baseLayers, weatherLayers, {{
+                position: 'topright',
+                collapsed: false
+            }}).addTo(map);
+            
+            // Add scale control
+            L.control.scale({{
+                position: 'bottomleft',
+                imperial: false,
+                metric: true
+            }}).addTo(map);
+            
+            // Custom legend control
+            var legend = L.control({{ position: 'bottomright' }});
+            legend.onAdd = function(map) {{
+                var div = L.DomUtil.create('div', 'legend');
+                div.innerHTML = `
+                    <h4>🗺️ Active Layers</h4>
+    """
+    
+    # Add legend items for each weather layer
+    for layer_name in weather_layers:
+        color = "#3388ff"
+        if layer_name == "Precipitation":
+            color = "#0099ff"
+        elif layer_name == "Temperature":
+            color = "#ff4444"
+        elif layer_name == "Clouds":
+            color = "#cccccc"
+        elif layer_name == "Wind Speed":
+            color = "#44ff44"
+        elif layer_name == "Pressure":
+            color = "#ff9944"
+        
+        map_html += f"""
+                    <div class="legend-item">
+                        <div class="legend-icon" style="background: {color};"></div>
+                        <span>{layer_name}</span>
+                    </div>
+    """
+    
+    map_html += """
+                `;
+                return div;
+            }};
+            legend.addTo(map);
+            
+            // Coordinates display control
+            var coordsDisplay = L.control({ position: 'topleft' });
+            coordsDisplay.onAdd = function(map) {
+                var div = L.DomUtil.create('div', 'coordinates');
+                div.id = 'coords';
+                div.innerHTML = `
+                    <div style="font-weight: bold; margin-bottom: 3px;">📍 Cursor Position</div>
+                    <div id="coord-text">Move mouse over map</div>
+                `;
+                return div;
+            };
+            coordsDisplay.addTo(map);
+            
+            // Update coordinates on mouse move
+            map.on('mousemove', function(e) {
+                var coordText = document.getElementById('coord-text');
+                if (coordText) {
+                    coordText.innerHTML = 
+                        'Lat: ' + e.latlng.lat.toFixed(5) + '<br>' +
+                        'Lon: ' + e.latlng.lng.toFixed(5);
+                }
+            });
+            
+            // Info box control
+            var info = L.control({ position: 'topright' });
+            info.onAdd = function(map) {
+                var div = L.DomUtil.create('div', 'info-box');
+                div.innerHTML = `
+                    <h4>💡 Map Tips</h4>
+                    <div style="margin: 5px 0;">
+                        🖱️ <strong>Click</strong> to get details<br>
+                        🔍 <strong>Scroll</strong> to zoom<br>
+                        👆 <strong>Drag</strong> to pan<br>
+                        📊 <strong>Layers</strong> on top-right
+                    </div>
+                `;
+                return div;
+            };
+            info.addTo(map);
+            
+            // Add click handler for weather info at any location
+            map.on('click', function(e) {
+                L.popup()
+                    .setLatLng(e.latlng)
+                    .setContent(`
+                        <div style="min-width: 180px;">
+                            <h4 style="margin: 0 0 8px; color: #667eea;">📍 Location</h4>
+                            <div style="font-size: 12px;">
+                                <strong>Latitude:</strong> ${e.latlng.lat.toFixed(5)}<br>
+                                <strong>Longitude:</strong> ${e.latlng.lng.toFixed(5)}
+                            </div>
+                            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd; font-size: 11px; color: #666;">
+                                Click the marker to see weather data
+                            </div>
+                        </div>
+                    `)
+                    .openOn(map);
+            });
+            
+            // Fit bounds to show Philippines
+            var philippinesBounds = L.latLngBounds(
+                L.latLng(4.5, 116.0),  // Southwest
+                L.latLng(21.0, 127.0)  // Northeast
+            );
+            
+            // Add "Reset View" button
+            L.Control.ResetView = L.Control.extend({
+                onAdd: function(map) {
+                    var button = L.DomUtil.create('div');
+                    button.innerHTML = `
+                        <button style="
+                            background: white;
+                            border: 2px solid rgba(0,0,0,0.2);
+                            border-radius: 4px;
+                            padding: 8px 12px;
+                            cursor: pointer;
+                            font-size: 13px;
+                            font-weight: 600;
+                            box-shadow: 0 1px 5px rgba(0,0,0,0.2);
+                        " onmouseover="this.style.background='#f0f0f0'" 
+                           onmouseout="this.style.background='white'"
+                           onclick="map.setView([{lat}, {lon}], 8)">
+                            🎯 Reset View
+                        </button>
+                    `;
+                    return button;
+                },
+                onRemove: function(map) {}
+            });
+            
+            L.control.resetView = function(opts) {
+                return new L.Control.ResetView(opts);
+            };
+            
+            L.control.resetView({ position: 'topleft' }).addTo(map);
+            
         </script>
     </body>
     </html>
