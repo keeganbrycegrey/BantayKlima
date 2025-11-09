@@ -519,12 +519,16 @@ with tab2:
     else:
         st.caption(f"Showing: {', '.join(weather_layers)} | Opacity: {int(map_opacity*100)}%")
     
+    # OpenWeatherMap Maps 2.0 API layer codes
     layer_map = {
-        "Precipitation": "precipitation_new",
-        "Temperature": "temp_new",
-        "Clouds": "clouds_new",
-        "Wind Speed": "wind_new",
-        "Pressure": "pressure_new"
+        "Precipitation": "PR0",        # Precipitation
+        "Temperature": "TA2",          # Air Temperature
+        "Clouds": "CL",                # Clouds
+        "Wind Speed": "WS10",          # Wind Speed
+        "Pressure": "APM",             # Atmospheric Pressure
+        "Wind Animation": "WND",       # Wind with arrows
+        "Humidity": "HRD0",            # Relative Humidity
+        "Accumulated Precipitation": "PAR0"  # Accumulated Precipitation
     }
     
     # Enhanced Leaflet map with advanced features
@@ -655,14 +659,14 @@ with tab2:
             var weatherLayers = {{}};
     """
     
-    # Add weather layers with better controls
+    # Add weather layers with better controls using Maps 2.0 API
     for layer_name in weather_layers:
         owm_layer = layer_map.get(layer_name)
         if owm_layer:
             map_html += f"""
-            weatherLayers["{layer_name}"] = L.tileLayer('https://tile.openweathermap.org/map/{owm_layer}/{{z}}/{{x}}/{{y}}.png?appid={OPENWEATHER_KEY}', {{
-                attribution: 'Weather: OpenWeatherMap',
-                opacity: {map_opacity},
+            weatherLayers["{layer_name}"] = L.tileLayer('https://maps.openweathermap.org/maps/2.0/weather/1h/{owm_layer}/{{z}}/{{x}}/{{y}}?appid={OPENWEATHER_KEY}&opacity={map_opacity}&fill_bound=true', {{
+                attribution: 'Weather: OpenWeatherMap Maps 2.0',
+                opacity: 1.0,
                 maxZoom: 19
             }}).addTo(map);
     """
@@ -887,22 +891,39 @@ with tab2:
     </html>
     """
     
-    components.html(map_html, height=700)
+    components.html(map_html, height=750)
     
     # Weather layer legend
     if weather_layers:
-        with st.expander("🎨 Layer Legend"):
+        with st.expander("🎨 Layer Legend & Info"):
+            st.markdown("**🗺️ OpenWeatherMap Maps 2.0 API** - Real-time and forecast data")
+            st.markdown("---")
             for layer in weather_layers:
                 if layer == "Precipitation":
-                    st.markdown("**🌧️ Precipitation**: Darker blue = heavier rain/snow")
+                    st.markdown("**🌧️ Precipitation (PR0)**")
+                    st.caption("Shows current rainfall/snowfall intensity in mm/h. Blue shades indicate precipitation levels.")
                 elif layer == "Temperature":
-                    st.markdown("**🌡️ Temperature**: Blue (cold) → Red (hot)")
+                    st.markdown("**🌡️ Air Temperature (TA2)**")
+                    st.caption("Current air temperature at 2m height. Color gradient from blue (cold) to red (hot).")
                 elif layer == "Clouds":
-                    st.markdown("**☁️ Clouds**: White areas show cloud coverage")
+                    st.markdown("**☁️ Clouds (CL)**")
+                    st.caption("Cloud coverage percentage. White/gray areas show cloud density.")
                 elif layer == "Wind Speed":
-                    st.markdown("**💨 Wind Speed**: Streamlines show wind direction and intensity")
+                    st.markdown("**💨 Wind Speed (WS10)**")
+                    st.caption("Wind speed at 10m height in m/s. Shows wind intensity with color gradients.")
                 elif layer == "Pressure":
-                    st.markdown("**🌡️ Pressure**: Contour lines show atmospheric pressure (mb)")
+                    st.markdown("**🌡️ Atmospheric Pressure (APM)**")
+                    st.caption("Sea level pressure in hPa. Contour lines show pressure systems.")
+                elif layer == "Wind Animation":
+                    st.markdown("**🌪️ Wind Animation (WND)**")
+                    st.caption("Animated wind direction and speed with particle effects. Shows wind flow patterns.")
+                elif layer == "Humidity":
+                    st.markdown("**💧 Relative Humidity (HRD0)**")
+                    st.caption("Air humidity percentage. Higher values shown in darker blue shades.")
+            
+            st.markdown("---")
+            st.info("💡 **Tip**: Use Maps 2.0 API for more accurate and detailed weather visualization with 1-hour updates!")
+
 
 # ---------------- Tab 3: Hazard Map ----------------
 with tab3:
