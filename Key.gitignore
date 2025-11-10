@@ -1,6 +1,3 @@
-# Streamlit Secrets Configuration
-# This file should be added to .gitignore
-
 # WeatherAPI.com API Key
 WEATHERAPI_KEY = "01cce600297f40debe2164114250911"
 
