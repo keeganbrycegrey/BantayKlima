@@ -530,7 +530,7 @@ with st.sidebar:
         st.rerun()
     
     st.caption("Made with ❤️ for the Philippines")
-            
+
             # Secondary metrics
             col5, col6, col7, col8 = st.columns(4)
             with col5:
