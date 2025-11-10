@@ -654,7 +654,11 @@ with st.sidebar:
 
 # ---------------- Tab 2: Interactive Map ----------------
 with tab2:
-    st.markdown("### 🗺️ OpenWeatherMap Maps 2.0")
+    st.markdown("### 🗺️ Real-Time Weather Map")
+    st.caption(f"Showing: {', '.join(weather_layers) if weather_layers else 'No layers selected'} • Opacity: {int(map_opacity*100)}%")
+    
+    if not weather_layers and not show_typhoons:
+        st.info("👆 Select weather layers or enable typhoon tracking from the sidebar to view the map")
     
     # Layer codes
     layer_map = {
@@ -666,152 +670,328 @@ with tab2:
         "Humidity": "HRD0"
     }
     
-    # Get current weather
+    # Get current weather for popup
     current_weather = get_weather_current(lat, lon)
     temp_display = "N/A"
-    condition_display = "N/A"
-    if current_weather:
-        temp_display = f"{current_weather.get('current', {}).get('temp_c', 'N/A')}°C"
-        condition_display = current_weather.get('current', {}).get('condition', {}).get('text', 'N/A')
+    condition_display = "Loading..."
+    wind_display = "N/A"
     
-    # Build map
+    if current_weather:
+        curr = current_weather.get('current', {})
+        temp_display = f"{curr.get('temp_c', 'N/A')}°C"
+        condition_display = curr.get('condition', {}).get('text', 'N/A')
+        wind_display = f"{curr.get('wind_kph', 'N/A')} km/h"
+    
+    # Build enhanced map HTML
     map_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <style>
-            body {{margin:0;padding:0;}}
-            #map {{height:750px;width:100%;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.3);}}
-            .legend {{
-                background:rgba(255,255,255,0.95);padding:15px;border-radius:8px;
-                box-shadow:0 2px 10px rgba(0,0,0,0.2);font-family:Arial;max-width:220px;
-            }}
-            .legend h4 {{margin:0 0 10px;font-size:14px;font-weight:600;color:#333;
-                        border-bottom:2px solid #667eea;padding-bottom:5px;}}
-            .legend-item {{margin:8px 0;font-size:11px;color:555;display:flex;align-items:center;}}
-            .legend-icon {{width:20px;height:20px;border-radius:3px;margin-right:8px;}}
-            .coordinates {{
-                background:rgba(0,0,0,0.8);color:white;padding:10px 14px;border-radius:8px;
-                font-family:'Courier New';font-size:12px;box-shadow:0 2px 10px rgba(0,0,0,0.4);
-            }}
-            @keyframes pulse {{
-                0% {{transform:scale(1);opacity:1;}}
-                50% {{transform:scale(1.3);opacity:0.5;}}
-                100% {{transform:scale(1);opacity:1;}}
-            }}
-        </style>
-    </head>
-    <body>
-        <div id="map"></div>
-        <script>
-            var map = L.map('map', {{center:[{lat},{lon}],zoom:{map_zoom},zoomControl:true,minZoom:5,maxZoom:15}});
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        html, body {{ height: 100%; width: 100%; }}
+        #map {{ 
+            height: 100%; 
+            width: 100%; 
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }}
+        .legend {{
+            background: rgba(255,255,255,0.95);
+            padding: 12px 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 200px;
+            font-size: 12px;
+        }}
+        .legend h4 {{
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 4px;
+        }}
+        .legend-item {{
+            margin: 6px 0;
+            display: flex;
+            align-items: center;
+            font-size: 11px;
+            color: #555;
+        }}
+        .legend-color {{
+            width: 18px;
+            height: 18px;
+            border-radius: 3px;
+            margin-right: 6px;
+            border: 1px solid rgba(0,0,0,0.2);
+        }}
+        .coords-box {{
+            background: rgba(0,0,0,0.85);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+            line-height: 1.5;
+        }}
+        .leaflet-popup-content {{
+            margin: 12px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+        }}
+        .leaflet-popup-content h3 {{
+            margin: 0 0 10px 0;
+            color: #667eea;
+            font-size: 15px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 4px;
+        }}
+        @keyframes pulse {{
+            0% {{ transform: scale(1); opacity: 1; }}
+            50% {{ transform: scale(1.3); opacity: 0.4; }}
+            100% {{ transform: scale(1); opacity: 1; }}
+        }}
+        .pulse-marker {{
+            animation: pulse 2s ease-in-out infinite;
+        }}
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script>
+        try {{
+            // Initialize map
+            var map = L.map('map', {{
+                center: [{lat}, {lon}],
+                zoom: {map_zoom},
+                zoomControl: true,
+                minZoom: 5,
+                maxZoom: 15
+            }});
             
+            // Base layers
             var baseLayers = {{
-                "🌙 Dark": L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png',{{attribution:'© CartoDB'}}),
-                "🛰️ Satellite": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',{{attribution:'© Esri'}}),
-                "🗺️ Streets": L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{attribution:'© OSM'}}),
-                "🏔️ Terrain": L.tileLayer('https://stamen-tiles-{{s}}.a.ssl.fastly.net/terrain/{{z}}/{{x}}/{{y}}.jpg',{{attribution:'© Stamen'}})
+                "🌙 Dark Mode": L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+                    attribution: '&copy; CartoDB',
+                    maxZoom: 19
+                }}),
+                "🛰️ Satellite": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+                    attribution: '&copy; Esri',
+                    maxZoom: 19
+                }}),
+                "🗺️ Street Map": L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                    attribution: '&copy; OpenStreetMap',
+                    maxZoom: 19
+                }}),
+                "🏔️ Terrain": L.tileLayer('https://stamen-tiles-{{s}}.a.ssl.fastly.net/terrain/{{z}}/{{x}}/{{y}}.jpg', {{
+                    attribution: '&copy; Stamen Design',
+                    maxZoom: 18
+                }})
             }};
             
-            baseLayers["🌙 Dark"].addTo(map);
+            // Add default base layer
+            baseLayers["🌙 Dark Mode"].addTo(map);
             
+            // Weather overlays
             var weatherOverlays = {{}};
-    """
+            
+"""
     
     # Add weather layers
     for layer_name in weather_layers:
         code = layer_map.get(layer_name)
         if code:
             map_html += f"""
+            // Add {layer_name} layer
             weatherOverlays["🌤️ {layer_name}"] = L.tileLayer(
-                'https://maps.openweathermap.org/maps/2.0/weather/1h/{code}/{{z}}/{{x}}/{{y}}?appid={OPENWEATHER_KEY}&opacity={map_opacity}&fill_bound=true',
-                {{opacity:1.0,maxZoom:15}}
+                'https://maps.openweathermap.org/maps/2.0/weather/1h/{code}/{{z}}/{{x}}/{{y}}?appid={OPENWEATHER_KEY}&opacity={map_opacity}',
+                {{
+                    attribution: 'OpenWeatherMap',
+                    opacity: 1.0,
+                    maxZoom: 15
+                }}
             ).addTo(map);
-    """
+            
+"""
     
-    # Add typhoons
+    # Add typhoon tracking
     if show_typhoons:
         typhoons = fetch_typhoon_tracks()
         if typhoons:
-            map_html += "var typhoonLayer = L.layerGroup();"
-            for feature in typhoons:
+            map_html += """
+            // Typhoon layer
+            var typhoonLayer = L.layerGroup();
+            
+"""
+            for idx, feature in enumerate(typhoons):
                 coords = feature.get('geometry', {}).get('coordinates', [])
                 props = feature.get('properties', {})
-                name = props.get('name', 'Typhoon')
+                name = props.get('name', f'Typhoon {idx+1}')
+                
                 if coords:
                     if isinstance(coords[0], list):
+                        # It's a line (track)
                         latlngs = [[c[1], c[0]] for c in coords]
-                        map_html += f"L.polyline({latlngs},{{color:'red',weight:4,opacity:0.8}}).bindPopup('<b>🌀 {name}</b><br>Active').addTo(typhoonLayer);"
+                        map_html += f"""
+            L.polyline({latlngs}, {{
+                color: '#ff0000',
+                weight: 4,
+                opacity: 0.8,
+                dashArray: '10, 5'
+            }}).bindPopup('<b>🌀 {name}</b><br>Track').addTo(typhoonLayer);
+            
+"""
                     else:
-                        map_html += f"L.circleMarker([{coords[1]},{coords[0]}],{{radius:8,fillColor:'#ff0000',color:'#fff',weight:2,opacity:1,fillOpacity:0.8}}).bindPopup('<b>🌀 {name}</b>').addTo(typhoonLayer);"
-            map_html += "typhoonLayer.addTo(map);weatherOverlays['🌀 Typhoons']=typhoonLayer;"
+                        # It's a point (current position)
+                        map_html += f"""
+            L.circleMarker([{coords[1]}, {coords[0]}], {{
+                radius: 10,
+                fillColor: '#ff0000',
+                color: '#ffffff',
+                weight: 3,
+                opacity: 1,
+                fillOpacity: 0.8
+            }}).bindPopup('<b>🌀 {name}</b><br>Current Position').addTo(typhoonLayer);
+            
+"""
+            
+            map_html += """
+            typhoonLayer.addTo(map);
+            weatherOverlays["🌀 Active Typhoons"] = typhoonLayer;
+            
+"""
     
-    # Location marker
+    # Add location marker and controls
     map_html += f"""
-            var pulsingIcon = L.divIcon({{
-                className:'custom-div-icon',
-                html:`<div style="position:relative;">
-                    <div style="width:40px;height:40px;background:rgba(255,0,0,0.4);border-radius:50%;
-                                position:absolute;top:-20px;left:-20px;animation:pulse 2s infinite;"></div>
-                    <div style="width:20px;height:20px;background:#ff0000;border:3px solid white;border-radius:50%;
-                                position:absolute;top:-10px;left:-10px;box-shadow:0 0 15px rgba(255,0,0,0.7);"></div>
-                </div>`,
-                iconSize:[40,40],iconAnchor:[20,20]
+            // User location marker with pulsing effect
+            var locationIcon = L.divIcon({{
+                className: 'pulse-marker',
+                html: '<div style="width:20px;height:20px;background:#ff0000;border:4px solid white;border-radius:50%;box-shadow:0 0 20px rgba(255,0,0,0.8);"></div>',
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
             }});
             
-            L.marker([{lat},{lon}],{{icon:pulsingIcon}}).addTo(map).bindPopup(`
-                <div style="min-width:220px;padding:5px;">
-                    <h3 style="margin:0 0 12px;color:#667eea;font-size:16px;border-bottom:2px solid #667eea;padding-bottom:5px;">
-                        📍 Your Location
-                    </h3>
-                    <div style="margin:8px 0;font-size:13px;"><strong>🌡️</strong> {temp_display}</div>
-                    <div style="margin:8px 0;font-size:13px;"><strong>☁️</strong> {condition_display}</div>
-                    <div style="margin:10px 0 5px;padding-top:10px;border-top:1px solid #ddd;font-size:11px;color:#666;">
-                        <strong>Coordinates:</strong><br>Lat: {lat:.6f}<br>Lon: {lon:.6f}
-                    </div>
+            var marker = L.marker([{lat}, {lon}], {{ icon: locationIcon }}).addTo(map);
+            
+            marker.bindPopup(`
+                <h3>📍 Your Location</h3>
+                <div style="margin-top:8px;font-size:13px;">
+                    <p style="margin:4px 0;"><strong>🌡️ Temperature:</strong> {temp_display}</p>
+                    <p style="margin:4px 0;"><strong>☁️ Conditions:</strong> {condition_display}</p>
+                    <p style="margin:4px 0;"><strong>💨 Wind:</strong> {wind_display}</p>
+                </div>
+                <div style="margin-top:10px;padding-top:8px;border-top:1px solid #ddd;font-size:11px;color:#666;">
+                    <strong>Coordinates:</strong><br>
+                    Lat: {lat:.6f}<br>
+                    Lon: {lon:.6f}
                 </div>
             `).openPopup();
             
-            L.circle([{lat},{lon}],{{color:'#667eea',fillColor:'#667eea',fillOpacity:0.08,radius:20000,weight:2,dashArray:'8,6'}}).addTo(map);
+            // 20km radius circle
+            L.circle([{lat}, {lon}], {{
+                color: '#667eea',
+                fillColor: '#667eea',
+                fillOpacity: 0.06,
+                radius: 20000,
+                weight: 2,
+                dashArray: '10, 5'
+            }}).addTo(map);
             
-            L.control.layers(baseLayers,weatherOverlays,{{position:'topright',collapsed:false}}).addTo(map);
-            L.control.scale({{position:'bottomleft',imperial:false}}).addTo(map);
+            // Add layer control
+            L.control.layers(baseLayers, weatherOverlays, {{
+                position: 'topright',
+                collapsed: false
+            }}).addTo(map);
             
-            var coordsDisplay = L.control({{position:'topleft'}});
-            coordsDisplay.onAdd = function(map) {{
-                var div = L.DomUtil.create('div','coordinates');
-                div.id = 'coords';
-                div.innerHTML = '<div style="font-weight:bold;margin-bottom:5px;">📍 Position</div><div id="coord-text">Hover map</div>';
+            // Add scale
+            L.control.scale({{
+                position: 'bottomleft',
+                imperial: false,
+                metric: true
+            }}).addTo(map);
+            
+            // Coordinates display
+            var coordControl = L.control({{ position: 'topleft' }});
+            coordControl.onAdd = function(map) {{
+                var div = L.DomUtil.create('div', 'coords-box');
+                div.innerHTML = '<strong>📍 Cursor</strong><div id="coords">Hover map</div>';
                 return div;
             }};
-            coordsDisplay.addTo(map);
+            coordControl.addTo(map);
             
-            map.on('mousemove',function(e){{
-                document.getElementById('coord-text').innerHTML='Lat: '+e.latlng.lat.toFixed(5)+'<br>Lon: '+e.latlng.lng.toFixed(5);
-            }});
-            
-            L.Control.ResetView = L.Control.extend({{
-                onAdd:function(map){{
-                    var button = L.DomUtil.create('div');
-                    button.innerHTML = `<button style="background:white;border:2px solid rgba(0,0,0,0.2);border-radius:6px;
-                                        padding:10px 14px;cursor:pointer;font-size:13px;font-weight:600;
-                                        box-shadow:0 2px 8px rgba(0,0,0,0.2);" 
-                                        onclick="map.setView([{lat},{lon}],{map_zoom})">🎯 Reset</button>`;
-                    return button;
+            // Update coordinates on hover
+            map.on('mousemove', function(e) {{
+                var coordsDiv = document.getElementById('coords');
+                if (coordsDiv) {{
+                    coordsDiv.innerHTML = 'Lat: ' + e.latlng.lat.toFixed(5) + '<br>Lon: ' + e.latlng.lng.toFixed(5);
                 }}
             }});
-            L.control.resetView = function(opts){{ return new L.Control.ResetView(opts); }};
-            L.control.resetView({{position:'topleft'}}).addTo(map);
-        </script>
-    </body>
-    </html>
-    """
+            
+            // Reset view button
+            var resetControl = L.control({{ position: 'topleft' }});
+            resetControl.onAdd = function(map) {{
+                var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+                div.innerHTML = `<a href="#" style="
+                    display:block;
+                    padding:6px 12px;
+                    background:white;
+                    color:#333;
+                    text-decoration:none;
+                    font-size:12px;
+                    font-weight:600;
+                    border-radius:4px;
+                    box-shadow:0 1px 5px rgba(0,0,0,0.4);
+                " title="Reset View">🎯 Reset</a>`;
+                
+                div.onclick = function(e) {{
+                    e.preventDefault();
+                    map.setView([{lat}, {lon}], {map_zoom});
+                }};
+                
+                return div;
+            }};
+            resetControl.addTo(map);
+            
+            console.log('Map initialized successfully');
+            
+        }} catch (error) {{
+            console.error('Map initialization error:', error);
+            document.getElementById('map').innerHTML = '<div style="padding:20px;text-align:center;color:#666;">⚠️ Map failed to load. Please refresh the page.</div>';
+        }}
+    </script>
+</body>
+</html>
+"""
     
-    components.html(map_html, height=800)
+    # Render map
+    components.html(map_html, height=800, scrolling=False)
+    
+    # Legend info
+    if weather_layers:
+        with st.expander("📖 Layer Information", expanded=False):
+            st.markdown("#### OpenWeatherMap Maps 2.0 Layers")
+            
+            for layer in weather_layers:
+                if layer == "Temperature":
+                    st.markdown("**🌡️ Temperature (TA2)** - Air temperature at 2m height. Blue=cold, Red=hot")
+                elif layer == "Precipitation":
+                    st.markdown("**🌧️ Precipitation (PR0)** - Rainfall/snowfall intensity in mm/h")
+                elif layer == "Wind Animation":
+                    st.markdown("**🌪️ Wind Animation (WND)** - Live wind flow with particle effects")
+                elif layer == "Clouds":
+                    st.markdown("**☁️ Clouds (CL)** - Cloud coverage percentage")
+                elif layer == "Pressure":
+                    st.markdown("**🌡️ Pressure (APM)** - Atmospheric pressure in hPa")
+                elif layer == "Humidity":
+                    st.markdown("**💧 Humidity (HRD0)** - Relative humidity percentage")
+            
+            st.info("💡 **Tip**: Layers update every hour. Combine multiple layers for better analysis!")
 
 # ---------------- Tab 3: Analysis ----------------
 with tab3:
