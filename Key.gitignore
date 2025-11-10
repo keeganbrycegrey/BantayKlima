@@ -1,0 +1,8 @@
+# Streamlit Secrets Configuration
+# This file should be added to .gitignore
+
+# WeatherAPI.com API Key
+WEATHERAPI_KEY = "01cce600297f40debe2164114250911"
+
+# OpenWeatherMap API Key
+OPENWEATHER_KEY = "f72458378cda7bd747aaa6415f7d1a98"
