@@ -543,26 +543,17 @@ with st.sidebar:
                 uv = current.get('uv', 0)
                 uv_cat, uv_icon = get_uv_category(uv)
                 st.metric("☀️ UV Index", f"{uv} {uv_icon}", delta=uv_cat, delta_color="off")
-            
+
             # Air Quality
             if current.get('air_quality'):
                 st.markdown("---")
                 st.markdown("### 🌫️ Air Quality")
-                
+
                 aqi = current['air_quality']
                 epa = aqi.get('us-epa-index', 0)
                 status, icon, color = get_aqi_status(epa)
-                
-                col_aqi1, col_aqi2, col_aqi3, col_aqi4 = st.columns(4)
-                with col_aqi1:
-                    st.markdown(f"<div style='background:{color};padding:1rem;border-radius:10px;text-align:center;color:white;'>"
-                               f"<h3>{icon} {status}</h3></div>", unsafe_allow_html=True)
-                with col_aqi2:
-                    st.metric("PM2.5", f"{aqi.get('pm2_5', 0):.1f} μg/m³")
-                with col_aqi3:
-                    st.metric("PM10", f"{aqi.get('pm10', 0):.1f} μg/m³")
-                with col_aqi4:
-                    st.metric("CO", f"{aqi.get('co', 0):.1f} μg/m³")
+
+                col_aqi1,...
     
     elif forecast_type == "Hourly (48h)":
         weather_data = get_weather_forecast(lat, lon, days=2)
