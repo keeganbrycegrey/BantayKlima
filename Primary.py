@@ -4,18 +4,55 @@ import pandas as pd
 import pydeck as pdk
 import streamlit.components.v1 as components
 from datetime import datetime, timedelta
-import json
+import os
 
 st.set_page_config(
-    page_title="PH Weather & Hazards",
+    page_title="PH Weather Monitor",
     page_icon="🌏",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ---------------- Configuration ----------------
-WEATHERAPI_KEY = "01cce600297f40debe2164114250911"
-OPENWEATHER_KEY = "f72458378cda7bd747aaa6415f7d1a98"
+# Load API keys from Streamlit secrets or environment variables
+try:
+    # Try Streamlit secrets first (for deployment)
+    WEATHERAPI_KEY = st.secrets["WEATHERAPI_KEY"]
+    OPENWEATHER_KEY = st.secrets["OPENWEATHER_KEY"]
+except (FileNotFoundError, KeyError):
+    # Fallback to environment variables (for local development)
+    WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
+    OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
+    
+    # If still no keys, show error
+    if not WEATHERAPI_KEY or not OPENWEATHER_KEY:
+        st.error("""
+        ⚠️ **API Keys Not Found!**
+        
+        Please set up your API keys using one of these methods:
+        
+        **Method 1: Streamlit Secrets (Recommended for deployment)**
+        1. Create `.streamlit/secrets.toml` file
+        2. Add your keys:
+        ```
+        WEATHERAPI_KEY = "your_weatherapi_key"
+        OPENWEATHER_KEY = "your_openweather_key"
+        ```
+        
+        **Method 2: Environment Variables (For local development)**
+        1. Create `.env` file
+        2. Add your keys:
+        ```
+        WEATHERAPI_KEY=your_weatherapi_key
+        OPENWEATHER_KEY=your_openweather_key
+        ```
+        3. Load with: `export $(cat .env | xargs)` (Mac/Linux) or set in Windows
+        
+        **Get your API keys:**
+        - WeatherAPI: https://weatherapi.com
+        - OpenWeatherMap: https://openweathermap.org/api
+        """)
+        st.stop()
 
 # ---------------- Custom CSS ----------------
 st.markdown("""
@@ -106,7 +143,7 @@ def geocode(query):
         st.error(f"Geocoding error: {e}")
         return []
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_weather_current(lat, lon):
     """Fetch current weather from WeatherAPI"""
     try:
@@ -125,7 +162,7 @@ def get_weather_current(lat, lon):
         st.error(f"Weather API error: {e}")
         return None
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_weather_forecast(lat, lon, days=7):
     """Fetch forecast weather from WeatherAPI"""
     try:
@@ -146,27 +183,6 @@ def get_weather_forecast(lat, lon, days=7):
         st.error(f"Weather API error: {e}")
         return None
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def arcgis_geojson(url):
-    """Fetch ArcGIS GeoJSON with better error handling"""
-    try:
-        r = requests.get(url, params={
-            "where": "1=1",
-            "outFields": "*",
-            "f": "geojson",
-            "returnGeometry": "true",
-            "resultRecordCount": 500
-        }, timeout=45)
-        r.raise_for_status()
-        data = r.json()
-        return data if data.get("features") else {"type": "FeatureCollection", "features": []}
-    except requests.exceptions.Timeout:
-        st.warning(f"Request timeout for {url.split('/')[-3]}")
-        return {"type": "FeatureCollection", "features": []}
-    except Exception as e:
-        st.warning(f"Could not fetch layer: {str(e)[:50]}")
-        return {"type": "FeatureCollection", "features": []}
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_typhoon_tracks():
     """Fetch typhoon tracks from GDACS"""
@@ -181,34 +197,6 @@ def fetch_typhoon_tracks():
         return features if features else []
     except Exception as e:
         return []
-
-# ---------------- Hazard URLs ----------------
-HAZARD_LAYERS = {
-    "Flood": {
-        "url": "https://controlmap.mgb.gov.ph/arcgis/rest/services/GeospatialDataInventory/GDI_Detailed_Flood_Susceptibility/FeatureServer/0/query",
-        "color": "[100, 100, 255, 180]",
-        "line_color": [0, 0, 255],
-        "icon": "🌊"
-    },
-    "Landslide": {
-        "url": "https://hazardhunter.georisk.gov.ph/server/rest/services/Landslide/Rain_Induced_Landslide_Hazard/MapServer/0/query",
-        "color": "[255, 165, 0, 180]",
-        "line_color": [255, 100, 0],
-        "icon": "⛰️"
-    },
-    "Tsunami": {
-        "url": "https://hazardhunter.georisk.gov.ph/server/rest/services/Tsunami/Tsunami_Hazard/MapServer/0/query",
-        "color": "[255, 0, 0, 150]",
-        "line_color": [200, 0, 0],
-        "icon": "🌊"
-    },
-    "Rainfall": {
-        "url": "https://portal.georisk.gov.ph/arcgis/rest/services/PAGASA/PAGASA/MapServer/0/query",
-        "color": "[0, 150, 255, 150]",
-        "line_color": [0, 100, 200],
-        "icon": "🌧️"
-    }
-}
 
 # ---------------- Sidebar ----------------
 with st.sidebar:
@@ -254,38 +242,42 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Weather Map Layers
+    # Weather Map Layers - Maps 2.0
     st.markdown("### 🗺️ Weather Layers")
+    st.caption("OpenWeatherMap Maps 2.0 (Updated hourly)")
+    
     weather_layers = st.multiselect(
         "Select weather overlays:",
-        ["Precipitation", "Temperature", "Clouds", "Wind Speed", "Pressure"],
-        default=["Precipitation"],
+        [
+            "Temperature", 
+            "Precipitation", 
+            "Wind Animation",
+            "Clouds", 
+            "Pressure",
+            "Humidity"
+        ],
+        default=["Temperature", "Wind Animation"],
         label_visibility="collapsed"
     )
     
-    map_opacity = st.slider("Layer Opacity", 0.0, 1.0, 0.6, 0.1)
+    map_opacity = st.slider("Layer Opacity", 0.3, 1.0, 0.7, 0.1)
     
     st.markdown("---")
     
-    # Hazard Layers
-    st.markdown("### 🛑 Hazard Layers")
-    hazards_enabled = st.multiselect(
-        "Select hazards:",
-        ["Flood", "Landslide", "Tsunami", "Typhoon Track", "Rainfall"],
-        default=["Typhoon Track"],
-        label_visibility="collapsed"
-    )
+    # Typhoon Tracking
+    st.markdown("### 🌀 Typhoon Tracking")
+    show_typhoons = st.checkbox("Show Active Typhoons", value=True)
     
     st.markdown("---")
     st.caption("**📊 Data Sources:**")
-    st.caption("• WeatherAPI.com")
-    st.caption("• OpenWeatherMap")
-    st.caption("• MGB, PHIVOLCS, PAGASA, GDACS")
+    st.caption("• WeatherAPI.com (Weather Data)")
+    st.caption("• OpenWeatherMap Maps 2.0 (Map Layers)")
+    st.caption("• GDACS (Typhoon Tracking)")
     st.caption(f"🕐 Updated: {datetime.now().strftime('%I:%M %p')}")
 
 # ---------------- Main Content ----------------
-st.markdown('<p class="main-header">🌏 Philippine Weather & Hazard Monitor</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Real-time weather forecasts and disaster risk mapping</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">🌏 Philippine Weather Monitor</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Real-time weather data with hourly-updated Maps 2.0 visualization</p>', unsafe_allow_html=True)
 
 # Weather Alerts Banner
 weather_data_check = get_weather_forecast(lat, lon, days=1)
@@ -296,7 +288,7 @@ if weather_data_check:
             st.error(f"⚠️ **WEATHER ALERT**: {alert.get('headline', 'Alert')}")
 
 # Main content tabs
-tab1, tab2, tab3 = st.tabs(["📊 Weather Forecast", "🗺️ Weather Map", "🛑 Hazard Map"])
+tab1, tab2 = st.tabs(["📊 Weather Forecast", "🗺️ Interactive Weather Map"])
 
 # ---------------- Tab 1: Weather Forecast ----------------
 with tab1:
@@ -510,28 +502,41 @@ with tab1:
                     use_container_width=True
                 )
 
-# ---------------- Tab 2: Weather Map ----------------
+# ---------------- Tab 2: Interactive Weather Map ----------------
 with tab2:
-    st.markdown("### 🌤️ Live Weather Overlay Map")
+    st.markdown("### 🗺️ OpenWeatherMap Maps 2.0 - Real-Time Weather Visualization")
     
-    if not weather_layers:
-        st.info("👆 Select weather layers from the sidebar to display on the map")
+    if not weather_layers and not show_typhoons:
+        st.info("👆 Select weather layers or enable typhoon tracking from the sidebar")
     else:
-        st.caption(f"Showing: {', '.join(weather_layers)} | Opacity: {int(map_opacity*100)}%")
+        layer_info = []
+        if weather_layers:
+            layer_info.append(f"**Weather**: {', '.join(weather_layers)}")
+        if show_typhoons:
+            layer_info.append("**Typhoons**: Active tracking")
+        
+        st.caption(" | ".join(layer_info) + f" | Opacity: {int(map_opacity*100)}%")
     
     # OpenWeatherMap Maps 2.0 API layer codes
     layer_map = {
-        "Precipitation": "PR0",        # Precipitation
-        "Temperature": "TA2",          # Air Temperature
-        "Clouds": "CL",                # Clouds
-        "Wind Speed": "WS10",          # Wind Speed
-        "Pressure": "APM",             # Atmospheric Pressure
-        "Wind Animation": "WND",       # Wind with arrows
-        "Humidity": "HRD0",            # Relative Humidity
-        "Accumulated Precipitation": "PAR0"  # Accumulated Precipitation
+        "Precipitation": "PR0",
+        "Temperature": "TA2",
+        "Clouds": "CL",
+        "Wind Speed": "WS10",
+        "Pressure": "APM",
+        "Wind Animation": "WND",
+        "Humidity": "HRD0"
     }
     
-    # Enhanced Leaflet map with advanced features
+    # Get current weather for popup
+    current_weather = get_weather_current(lat, lon)
+    temp_display = "N/A"
+    condition_display = "Loading..."
+    if current_weather:
+        temp_display = f"{current_weather.get('current', {}).get('temp_c', 'N/A')}°C"
+        condition_display = current_weather.get('current', {}).get('condition', {}).get('text', 'N/A')
+    
+    # Enhanced Leaflet map with Maps 2.0
     map_html = f"""
     <!DOCTYPE html>
     <html>
@@ -542,7 +547,7 @@ with tab2:
         <style>
             body {{ margin: 0; padding: 0; }}
             #map {{ 
-                height: 700px; 
+                height: 750px; 
                 width: 100%; 
                 border-radius: 12px;
                 box-shadow: 0 4px 20px rgba(0,0,0,0.3);
@@ -553,7 +558,7 @@ with tab2:
                 border-radius: 8px;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.2);
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                max-width: 200px;
+                max-width: 220px;
             }}
             .legend h4 {{ 
                 margin: 0 0 10px; 
@@ -565,7 +570,7 @@ with tab2:
             }}
             .legend-item {{
                 margin: 8px 0;
-                font-size: 12px;
+                font-size: 11px;
                 color: #555;
                 display: flex;
                 align-items: center;
@@ -577,154 +582,172 @@ with tab2:
                 margin-right: 8px;
                 display: inline-block;
             }}
+            .coordinates {{
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 10px 14px;
+                border-radius: 8px;
+                font-family: 'Courier New', monospace;
+                font-size: 12px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+                line-height: 1.6;
+            }}
             .info-box {{
                 background: rgba(255, 255, 255, 0.95);
                 padding: 12px;
                 border-radius: 8px;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.2);
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                font-size: 13px;
-                max-width: 250px;
+                font-size: 12px;
             }}
             .info-box h4 {{
                 margin: 0 0 8px;
-                font-size: 15px;
+                font-size: 14px;
                 color: #667eea;
                 font-weight: 600;
             }}
-            .coordinates {{
-                background: rgba(0, 0, 0, 0.7);
-                color: white;
-                padding: 8px 12px;
-                border-radius: 6px;
-                font-family: 'Courier New', monospace;
-                font-size: 12px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            }}
-            .leaflet-popup-content-wrapper {{
-                border-radius: 8px;
-                box-shadow: 0 3px 14px rgba(0,0,0,0.3);
-            }}
-            .leaflet-popup-content {{
-                margin: 15px;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            }}
-            .pulse {{
-                animation: pulse 2s infinite;
-            }}
             @keyframes pulse {{
-                0% {{ opacity: 1; }}
-                50% {{ opacity: 0.5; }}
-                100% {{ opacity: 1; }}
+                0% {{ transform: scale(1); opacity: 1; }}
+                50% {{ transform: scale(1.3); opacity: 0.5; }}
+                100% {{ transform: scale(1); opacity: 1; }}
             }}
         </style>
     </head>
     <body>
         <div id="map"></div>
         <script>
-            // Initialize map with better settings
             var map = L.map('map', {{
                 center: [{lat}, {lon}],
                 zoom: 8,
                 zoomControl: true,
                 minZoom: 5,
-                maxZoom: 18,
+                maxZoom: 15,
                 attributionControl: true
             }});
             
-            // Base layer options
+            // Base layers
             var baseLayers = {{
-                "Dark": L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-                    attribution: '© OpenStreetMap, © CartoDB',
-                    maxZoom: 19
+                "🌙 Dark": L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+                    attribution: '© OpenStreetMap, © CartoDB'
                 }}),
-                "Satellite": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
-                    attribution: 'Tiles © Esri',
-                    maxZoom: 19
+                "🛰️ Satellite": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+                    attribution: '© Esri'
                 }}),
-                "Streets": L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                    attribution: '© OpenStreetMap contributors',
-                    maxZoom: 19
+                "🗺️ Streets": L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                    attribution: '© OpenStreetMap'
                 }}),
-                "Terrain": L.tileLayer('https://stamen-tiles-{{s}}.a.ssl.fastly.net/terrain/{{z}}/{{x}}/{{y}}.jpg', {{
-                    attribution: 'Map tiles by Stamen Design, CC BY 3.0',
-                    maxZoom: 18
+                "🏔️ Terrain": L.tileLayer('https://stamen-tiles-{{s}}.a.ssl.fastly.net/terrain/{{z}}/{{x}}/{{y}}.jpg', {{
+                    attribution: '© Stamen Design'
                 }})
             }};
             
-            // Add default base layer
-            baseLayers["Dark"].addTo(map);
+            baseLayers["🌙 Dark"].addTo(map);
             
-            // Weather layers object
-            var weatherLayers = {{}};
+            // Weather overlays using Maps 2.0
+            var weatherOverlays = {{}};
     """
     
-    # Add weather layers with better controls using Maps 2.0 API
+    # Add weather layers using Maps 2.0 API
     for layer_name in weather_layers:
         owm_layer = layer_map.get(layer_name)
         if owm_layer:
             map_html += f"""
-            weatherLayers["{layer_name}"] = L.tileLayer('https://maps.openweathermap.org/maps/2.0/weather/1h/{owm_layer}/{{z}}/{{x}}/{{y}}?appid={OPENWEATHER_KEY}&opacity={map_opacity}&fill_bound=true', {{
-                attribution: 'Weather: OpenWeatherMap Maps 2.0',
-                opacity: 1.0,
-                maxZoom: 19
-            }}).addTo(map);
+            weatherOverlays["🌤️ {layer_name}"] = L.tileLayer(
+                'https://maps.openweathermap.org/maps/2.0/weather/1h/{owm_layer}/{{z}}/{{x}}/{{y}}?appid={OPENWEATHER_KEY}&opacity={map_opacity}&fill_bound=true', 
+                {{
+                    attribution: 'OpenWeatherMap Maps 2.0',
+                    opacity: 1.0,
+                    maxZoom: 15
+                }}
+            ).addTo(map);
     """
     
-    # Add location marker with pulsing effect
-    current_weather = get_weather_current(lat, lon)
-    temp_display = "N/A"
-    condition_display = "Loading..."
-    if current_weather:
-        temp_display = f"{current_weather.get('current', {}).get('temp_c', 'N/A')}°C"
-        condition_display = current_weather.get('current', {}).get('condition', {}).get('text', 'N/A')
+    # Add typhoon tracks if enabled
+    if show_typhoons:
+        typhoon_data = fetch_typhoon_tracks()
+        if typhoon_data:
+            map_html += """
+            var typhoonLayer = L.layerGroup();
+            """
+            for feature in typhoon_data:
+                coords = feature.get('geometry', {}).get('coordinates', [])
+                props = feature.get('properties', {})
+                if coords:
+                    # Convert coordinates for Leaflet (lon, lat to lat, lon)
+                    if isinstance(coords[0], list):
+                        # It's a LineString
+                        latlngs = [[c[1], c[0]] for c in coords]
+                        map_html += f"""
+                        L.polyline({latlngs}, {{
+                            color: 'red',
+                            weight: 4,
+                            opacity: 0.8
+                        }}).bindPopup('<b>🌀 {props.get("name", "Typhoon")}</b><br>Status: Active').addTo(typhoonLayer);
+                        """
+                    else:
+                        # It's a Point
+                        map_html += f"""
+                        L.circleMarker([{coords[1]}, {coords[0]}], {{
+                            radius: 8,
+                            fillColor: "#ff0000",
+                            color: "#fff",
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        }}).bindPopup('<b>🌀 {props.get("name", "Typhoon")}</b><br>Status: Active').addTo(typhoonLayer);
+                        """
+            
+            map_html += """
+            typhoonLayer.addTo(map);
+            weatherOverlays["🌀 Typhoon Tracks"] = typhoonLayer;
+            """
     
     map_html += f"""
-            // Custom pulsing marker
+            // Location marker with pulsing animation
             var pulsingIcon = L.divIcon({{
                 className: 'custom-div-icon',
                 html: `
                     <div style="position: relative;">
                         <div style="
-                            width: 30px; 
-                            height: 30px; 
-                            background: rgba(255, 0, 0, 0.3);
+                            width: 40px; 
+                            height: 40px; 
+                            background: rgba(255, 0, 0, 0.4);
                             border-radius: 50%;
                             position: absolute;
-                            top: -15px;
-                            left: -15px;
+                            top: -20px;
+                            left: -20px;
                             animation: pulse 2s infinite;
                         "></div>
                         <div style="
-                            width: 15px; 
-                            height: 15px; 
+                            width: 20px; 
+                            height: 20px; 
                             background: #ff0000;
                             border: 3px solid white;
                             border-radius: 50%;
                             position: absolute;
-                            top: -7.5px;
-                            left: -7.5px;
-                            box-shadow: 0 0 10px rgba(255,0,0,0.5);
+                            top: -10px;
+                            left: -10px;
+                            box-shadow: 0 0 15px rgba(255,0,0,0.7);
                         "></div>
                     </div>
                 `,
-                iconSize: [30, 30],
-                iconAnchor: [15, 15]
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
             }});
             
             var locationMarker = L.marker([{lat}, {lon}], {{icon: pulsingIcon}}).addTo(map);
             locationMarker.bindPopup(`
-                <div style="min-width: 200px;">
-                    <h3 style="margin: 0 0 10px; color: #667eea; font-size: 16px;">
+                <div style="min-width: 220px; padding: 5px;">
+                    <h3 style="margin: 0 0 12px; color: #667eea; font-size: 16px; border-bottom: 2px solid #667eea; padding-bottom: 5px;">
                         📍 Your Location
                     </h3>
-                    <div style="margin: 8px 0;">
+                    <div style="margin: 8px 0; font-size: 13px;">
                         <strong>🌡️ Temperature:</strong> {temp_display}
                     </div>
-                    <div style="margin: 8px 0;">
+                    <div style="margin: 8px 0; font-size: 13px;">
                         <strong>☁️ Conditions:</strong> {condition_display}
                     </div>
-                    <div style="margin: 8px 0; font-size: 11px; color: #666;">
+                    <div style="margin: 10px 0 5px; padding-top: 10px; border-top: 1px solid #ddd; font-size: 11px; color: #666;">
                         <strong>Coordinates:</strong><br>
                         Lat: {lat:.6f}<br>
                         Lon: {lon:.6f}
@@ -732,73 +755,70 @@ with tab2:
                 </div>
             `).openPopup();
             
-            // Add circle around location
+            // 20km radius circle
             L.circle([{lat}, {lon}], {{
                 color: '#667eea',
                 fillColor: '#667eea',
-                fillOpacity: 0.1,
+                fillOpacity: 0.08,
                 radius: 20000,
                 weight: 2,
-                dashArray: '5, 5'
+                dashArray: '8, 6'
             }}).addTo(map);
             
             // Layer control
-            L.control.layers(baseLayers, weatherLayers, {{
+            L.control.layers(baseLayers, weatherOverlays, {{
                 position: 'topright',
                 collapsed: false
             }}).addTo(map);
             
-            // Add scale control
+            // Scale control
             L.control.scale({{
                 position: 'bottomleft',
                 imperial: false,
                 metric: true
             }}).addTo(map);
             
-            // Custom legend control
+            // Legend
             var legend = L.control({{ position: 'bottomright' }});
             legend.onAdd = function(map) {{
                 var div = L.DomUtil.create('div', 'legend');
-                div.innerHTML = `
-                    <h4>🗺️ Active Layers</h4>
+                div.innerHTML = '<h4>🗺️ Maps 2.0 Layers</h4>';
     """
     
-    # Add legend items for each weather layer
+    # Add legend items
     for layer_name in weather_layers:
-        color = "#3388ff"
-        if layer_name == "Precipitation":
-            color = "#0099ff"
-        elif layer_name == "Temperature":
-            color = "#ff4444"
-        elif layer_name == "Clouds":
-            color = "#cccccc"
-        elif layer_name == "Wind Speed":
-            color = "#44ff44"
-        elif layer_name == "Pressure":
-            color = "#ff9944"
+        color_map = {
+            "Temperature": "#ff4444",
+            "Precipitation": "#0099ff",
+            "Clouds": "#cccccc",
+            "Wind Speed": "#44ff44",
+            "Wind Animation": "#ffaa00",
+            "Pressure": "#ff9944",
+            "Humidity": "#66ccff"
+        }
+        color = color_map.get(layer_name, "#888888")
+        layer_code = layer_map.get(layer_name, "")
         
         map_html += f"""
-                    <div class="legend-item">
-                        <div class="legend-icon" style="background: {color};"></div>
-                        <span>{layer_name}</span>
-                    </div>
+                div.innerHTML += '<div class="legend-item"><div class="legend-icon" style="background: {color};"></div><span>{layer_name} ({layer_code})</span></div>';
+    """
+    
+    if show_typhoons:
+        map_html += """
+                div.innerHTML += '<div class="legend-item"><div class="legend-icon" style="background: #ff0000;"></div><span>Typhoon Tracks</span></div>';
     """
     
     map_html += """
-                `;
                 return div;
             }};
             legend.addTo(map);
             
-            // Coordinates display control
+            // Coordinates display
             var coordsDisplay = L.control({ position: 'topleft' });
             coordsDisplay.onAdd = function(map) {
                 var div = L.DomUtil.create('div', 'coordinates');
                 div.id = 'coords';
-                div.innerHTML = `
-                    <div style="font-weight: bold; margin-bottom: 3px;">📍 Cursor Position</div>
-                    <div id="coord-text">Move mouse over map</div>
-                `;
+                div.innerHTML = '<div style="font-weight: bold; margin-bottom: 5px;">📍 Cursor Position</div><div id="coord-text">Hover over map</div>';
                 return div;
             };
             coordsDisplay.addTo(map);
@@ -807,55 +827,48 @@ with tab2:
             map.on('mousemove', function(e) {
                 var coordText = document.getElementById('coord-text');
                 if (coordText) {
-                    coordText.innerHTML = 
-                        'Lat: ' + e.latlng.lat.toFixed(5) + '<br>' +
-                        'Lon: ' + e.latlng.lng.toFixed(5);
+                    coordText.innerHTML = 'Lat: ' + e.latlng.lat.toFixed(5) + '<br>Lon: ' + e.latlng.lng.toFixed(5);
                 }
             });
             
-            // Info box control
+            // Info box
             var info = L.control({ position: 'topright' });
             info.onAdd = function(map) {
                 var div = L.DomUtil.create('div', 'info-box');
                 div.innerHTML = `
-                    <h4>💡 Map Tips</h4>
-                    <div style="margin: 5px 0;">
-                        🖱️ <strong>Click</strong> to get details<br>
+                    <h4>💡 Map Controls</h4>
+                    <div style="line-height: 1.8;">
+                        🖱️ <strong>Click</strong> for details<br>
                         🔍 <strong>Scroll</strong> to zoom<br>
                         👆 <strong>Drag</strong> to pan<br>
-                        📊 <strong>Layers</strong> on top-right
+                        📊 <strong>Layers</strong> top-right<br>
+                        🔄 Updates hourly
                     </div>
                 `;
                 return div;
             };
             info.addTo(map);
             
-            // Add click handler for weather info at any location
+            // Click handler for location details
             map.on('click', function(e) {
                 L.popup()
                     .setLatLng(e.latlng)
                     .setContent(`
-                        <div style="min-width: 180px;">
-                            <h4 style="margin: 0 0 8px; color: #667eea;">📍 Location</h4>
+                        <div style="min-width: 180px; padding: 5px;">
+                            <h4 style="margin: 0 0 8px; color: #667eea;">📍 Location Info</h4>
                             <div style="font-size: 12px;">
-                                <strong>Latitude:</strong> ${e.latlng.lat.toFixed(5)}<br>
-                                <strong>Longitude:</strong> ${e.latlng.lng.toFixed(5)}
+                                <strong>Latitude:</strong> ${e.latlng.lat.toFixed(6)}<br>
+                                <strong>Longitude:</strong> ${e.latlng.lng.toFixed(6)}
                             </div>
-                            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd; font-size: 11px; color: #666;">
-                                Click the marker to see weather data
+                            <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 11px; color: #666;">
+                                Weather data updated hourly
                             </div>
                         </div>
                     `)
                     .openOn(map);
             });
             
-            // Fit bounds to show Philippines
-            var philippinesBounds = L.latLngBounds(
-                L.latLng(4.5, 116.0),  // Southwest
-                L.latLng(21.0, 127.0)  // Northeast
-            );
-            
-            // Add "Reset View" button
+            // Reset view button
             L.Control.ResetView = L.Control.extend({
                 onAdd: function(map) {
                     var button = L.DomUtil.create('div');
@@ -863,15 +876,17 @@ with tab2:
                         <button style="
                             background: white;
                             border: 2px solid rgba(0,0,0,0.2);
-                            border-radius: 4px;
-                            padding: 8px 12px;
+                            border-radius: 6px;
+                            padding: 10px 14px;
                             cursor: pointer;
                             font-size: 13px;
                             font-weight: 600;
-                            box-shadow: 0 1px 5px rgba(0,0,0,0.2);
-                        " onmouseover="this.style.background='#f0f0f0'" 
-                           onmouseout="this.style.background='white'"
-                           onclick="map.setView([{lat}, {lon}], 8)">
+                            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+                            transition: all 0.2s;
+                        " 
+                        onmouseover="this.style.background='#f0f0f0'; this.style.transform='translateY(-2px)'" 
+                        onmouseout="this.style.background='white'; this.style.transform='translateY(0)'"
+                        onclick="map.setView([{lat}, {lon}], 8)">
                             🎯 Reset View
                         </button>
                     `;
@@ -891,112 +906,163 @@ with tab2:
     </html>
     """
     
-    components.html(map_html, height=750)
+    components.html(map_html, height=800)
     
-    # Weather layer legend
+    # Weather layer information
     if weather_layers:
-        with st.expander("🎨 Layer Legend & Info"):
-            st.markdown("**🗺️ OpenWeatherMap Maps 2.0 API** - Real-time and forecast data")
+        with st.expander("📖 Maps 2.0 Layer Information", expanded=False):
+            st.markdown("### OpenWeatherMap Maps 2.0 API")
+            st.info("🔄 **Update Frequency:** Hourly | **Coverage:** Global | **Resolution:** High")
+            
             st.markdown("---")
+            
             for layer in weather_layers:
-                if layer == "Precipitation":
-                    st.markdown("**🌧️ Precipitation (PR0)**")
-                    st.caption("Shows current rainfall/snowfall intensity in mm/h. Blue shades indicate precipitation levels.")
-                elif layer == "Temperature":
+                if layer == "Temperature":
                     st.markdown("**🌡️ Air Temperature (TA2)**")
-                    st.caption("Current air temperature at 2m height. Color gradient from blue (cold) to red (hot).")
-                elif layer == "Clouds":
-                    st.markdown("**☁️ Clouds (CL)**")
-                    st.caption("Cloud coverage percentage. White/gray areas show cloud density.")
-                elif layer == "Wind Speed":
-                    st.markdown("**💨 Wind Speed (WS10)**")
-                    st.caption("Wind speed at 10m height in m/s. Shows wind intensity with color gradients.")
-                elif layer == "Pressure":
-                    st.markdown("**🌡️ Atmospheric Pressure (APM)**")
-                    st.caption("Sea level pressure in hPa. Contour lines show pressure systems.")
+                    st.caption("Real-time air temperature at 2 meters above ground level. Color gradient from blue (cold) to red (hot).")
+                    st.caption("📊 **Range:** -40°C to 50°C | **Unit:** Celsius")
+                
+                elif layer == "Precipitation":
+                    st.markdown("**🌧️ Precipitation (PR0)**")
+                    st.caption("Current rainfall and snowfall intensity. Darker blue indicates heavier precipitation.")
+                    st.caption("📊 **Range:** 0-50+ mm/h | **Unit:** mm per hour")
+                
                 elif layer == "Wind Animation":
                     st.markdown("**🌪️ Wind Animation (WND)**")
-                    st.caption("Animated wind direction and speed with particle effects. Shows wind flow patterns.")
+                    st.caption("Animated wind flow showing direction and speed using particle effects. Most visually dynamic layer.")
+                    st.caption("📊 **Display:** Real-time wind vectors | **Updates:** Live animation")
+                
+                elif layer == "Clouds":
+                    st.markdown("**☁️ Cloud Coverage (CL)**")
+                    st.caption("Percentage of sky covered by clouds. White/gray shading indicates cloud density.")
+                    st.caption("📊 **Range:** 0-100% | **Unit:** Percentage")
+                
+                elif layer == "Wind Speed":
+                    st.markdown("**💨 Wind Speed (WS10)**")
+                    st.caption("Wind velocity at 10 meters height. Color-coded by intensity with direction indicators.")
+                    st.caption("📊 **Range:** 0-50+ m/s | **Unit:** Meters per second")
+                
+                elif layer == "Pressure":
+                    st.markdown("**🌡️ Atmospheric Pressure (APM)**")
+                    st.caption("Sea level pressure with isobar contour lines. Shows high/low pressure systems.")
+                    st.caption("📊 **Range:** 950-1050 hPa | **Unit:** Hectopascals")
+                
                 elif layer == "Humidity":
                     st.markdown("**💧 Relative Humidity (HRD0)**")
-                    st.caption("Air humidity percentage. Higher values shown in darker blue shades.")
+                    st.caption("Air moisture content as percentage. Higher humidity shown in darker blue.")
+                    st.caption("📊 **Range:** 0-100% | **Unit:** Percentage")
+                
+                st.markdown("")
             
             st.markdown("---")
-            st.info("💡 **Tip**: Use Maps 2.0 API for more accurate and detailed weather visualization with 1-hour updates!")
+            st.success("💡 **Pro Tip:** Combine multiple layers to analyze complex weather patterns. Try Temperature + Wind Animation for comprehensive weather visualization!")
 
+# ---------------- Footer ----------------
+st.markdown("---")
+st.markdown("""
+<div style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            padding: 30px; border-radius: 10px; text-align: center; color: white;'>
+    <h3 style='margin: 0; color: white;'>🌏 Philippine Weather Monitor</h3>
+    <p style='margin: 10px 0 5px 0; font-size: 0.95rem;'>
+        Powered by <strong>OpenWeatherMap Maps 2.0</strong> • Real-time hourly updates
+    </p>
+    <p style='margin: 5px 0; font-size: 0.85rem; opacity: 0.9;'>
+        Weather Data: WeatherAPI.com | Map Layers: OpenWeatherMap Maps 2.0 | Typhoons: GDACS
+    </p>
+    <p style='margin: 10px 0 0 0; font-size: 0.75rem; opacity: 0.8;'>
+        Built with Streamlit • Updates every 5 minutes
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
-# ---------------- Tab 3: Hazard Map ----------------
-with tab3:
-    st.markdown("### 🛑 Natural Hazard Risk Layers")
+# ---------------- Sidebar Information Panel ----------------
+with st.sidebar:
+    st.markdown("---")
     
-    if not hazards_enabled:
-        st.info("👆 Select hazard layers from the sidebar to display")
-    else:
-        with st.spinner("Loading hazard data layers..."):
-            layers = []
-            
-            # Process hazard layers
-            for hazard_name in hazards_enabled:
-                if hazard_name in HAZARD_LAYERS:
-                    hazard_config = HAZARD_LAYERS[hazard_name]
-                    geo_data = arcgis_geojson(hazard_config["url"])
-                    
-                    if geo_data.get("features"):
-                        layers.append(pdk.Layer(
-                            "GeoJsonLayer",
-                            data=geo_data,
-                            opacity=0.5,
-                            stroked=True,
-                            filled=True,
-                            pickable=True,
-                            get_fill_color=hazard_config["color"],
-                            get_line_color=hazard_config["line_color"],
-                            line_width_min_pixels=1,
-                            auto_highlight=True
-                        ))
-                        st.success(f"{hazard_config['icon']} {hazard_name} layer loaded ({len(geo_data['features'])} features)")
-                    else:
-                        st.warning(f"⚠️ {hazard_name} layer has no data for this area")
-            
-            # Typhoon tracks
-            if "Typhoon Track" in hazards_enabled:
-                track_feats = fetch_typhoon_tracks()
-                if track_feats:
-                    layers.append(pdk.Layer(
-                        "GeoJsonLayer",
-                        data={"type": "FeatureCollection", "features": track_feats},
-                        stroked=True,
-                        filled=False,
-                        get_line_color=[255, 0, 0],
-                        get_line_width=5,
-                        line_width_min_pixels=3,
-                        pickable=True
-                    ))
-                    st.success(f"🌀 Typhoon Track loaded ({len(track_feats)} active systems)")
-                else:
-                    st.info("✅ No active typhoons detected")
-            
-            # User location marker
-            layers.append(pdk.Layer(
-                "ScatterplotLayer",
-                data=[{"lat": lat, "lon": lon}],
-                get_position='[lon, lat]',
-                get_radius=8000,
-                get_fill_color=[255, 0, 0, 200],
-                pickable=True
-            ))
-            
-            if layers:
-                deck = pdk.Deck(
-                    initial_view_state=pdk.ViewState(
-                        latitude=lat,
-                        longitude=lon,
-                        zoom=8,
-                        pitch=0
-                    ),
-                    layers=layers,
-                    tooltip={
-                        "html": "<b>{properties.name}</b><br/>Severity: {properties.severity}",
-                        "style": {"color": "white"}
-                    }
-                )
+    # Quick Stats
+    with st.expander("📈 Quick Stats", expanded=False):
+        st.markdown(f"""
+        **Active Layers:**
+        - Weather: {len(weather_layers)}
+        - Typhoons: {"Yes" if show_typhoons else "No"}
+        
+        **Location:**
+        - Lat: {lat:.4f}
+        - Lon: {lon:.4f}
+        
+        **Data Freshness:**
+        - Weather: ~5 min
+        - Maps 2.0: ~60 min
+        - Typhoons: ~60 min
+        """)
+    
+    # Maps 2.0 Info
+    with st.expander("🗺️ About Maps 2.0", expanded=False):
+        st.markdown("""
+        **OpenWeatherMap Maps 2.0**
+        
+        Advanced weather mapping with:
+        - ⏱️ Hourly updates
+        - 🌍 Global coverage
+        - 🎯 High resolution tiles
+        - 🔄 Real-time data
+        - 📊 Multiple parameters
+        - 🎨 Professional visualization
+        
+        **Available Layers:**
+        - Temperature (TA2)
+        - Precipitation (PR0)
+        - Wind Animation (WND)
+        - Clouds (CL)
+        - Wind Speed (WS10)
+        - Pressure (APM)
+        - Humidity (HRD0)
+        """)
+    
+    # Help
+    with st.expander("ℹ️ Help & Tips", expanded=False):
+        st.markdown("""
+        **Getting Started:**
+        1. Search for your location
+        2. Select weather layers
+        3. Adjust opacity slider
+        4. Explore the interactive map
+        
+        **Map Features:**
+        - Switch base maps (top-right)
+        - Toggle layers on/off
+        - Click anywhere for coordinates
+        - Hover for live position
+        - Reset view button (top-left)
+        
+        **Best Combinations:**
+        - Temperature + Wind Animation
+        - Precipitation + Clouds
+        - Pressure + Wind Speed
+        """)
+    
+    # Data Sources
+    with st.expander("📚 Data Sources", expanded=False):
+        st.markdown("""
+        **Weather Data:**
+        - [WeatherAPI.com](https://weatherapi.com)
+        - Updates: Every 15 minutes
+        - Coverage: Global
+        
+        **Map Visualization:**
+        - [OpenWeatherMap Maps 2.0](https://openweathermap.org/api/weathermaps)
+        - Updates: Hourly
+        - Resolution: High-def tiles
+        
+        **Typhoon Tracking:**
+        - [GDACS](https://gdacs.org)
+        - Updates: Real-time
+        - Source: Multiple agencies
+        """)
+
+# Add refresh button
+col_refresh1, col_refresh2, col_refresh3 = st.columns([1, 1, 1])
+with col_refresh2:
+    if st.button("🔄 Refresh All Data", type="primary", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
