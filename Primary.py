@@ -16,7 +16,7 @@ st.set_page_config(
 # ---------------- Configuration ----------------
 # Load API keys from Streamlit secrets or environment variables
 try:
-    # Try Streamlit secrets first (for deployment)
+    
     WEATHERAPI_KEY = st.secrets["WEATHERAPI_KEY"]
     OPENWEATHER_KEY = st.secrets["OPENWEATHER_KEY"]
 except (FileNotFoundError, KeyError):
